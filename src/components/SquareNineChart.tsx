@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { Button, Card, Checkbox, Col, ConfigProvider, InputNumber, Row, Segmented, Slider, Space } from 'antd'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type WheelEvent } from 'react'
+import { Button, Card, Checkbox, Col, ConfigProvider, InputNumber, Row, Segmented, Slider, Space, Tag } from 'antd'
 import {
   ArrowDownOutlined,
   ArrowUpOutlined,
@@ -11,39 +11,16 @@ import {
   UpOutlined,
 } from '@ant-design/icons'
 import 'antd/dist/reset.css'
+import {
+  calculateClickTrend,
+  findNumberPosition,
+  generateGannMatrix,
+  getTrendExtensionPoints,
+  type MatrixPoint,
+  type Trend,
+} from '../utils/squareNine'
 
-type Trend = 'up' | 'down'
 type GuideOption = '1x1' | '1x2' | '1x3' | '1x4' | '1x8' | 'cross'
-
-type MatrixPoint = {
-  r: number
-  c: number
-  value: number
-}
-
-type SpiralPoint = {
-  row: number
-  col: number
-}
-
-type AbsPoint = {
-  x: number
-  y: number
-}
-
-type TrendResult = {
-  clickedValue: number
-  clickedIndex: number
-  trend: Trend
-  point?: SpiralPoint
-  absPoint?: AbsPoint
-  type?: number
-  sector?: number
-  distance?: number
-  mainLine: MatrixPoint[]
-  crossLine: MatrixPoint[]
-  trendCells: MatrixPoint[]
-}
 
 type Cell = MatrixPoint & {
   key: string
@@ -57,9 +34,11 @@ type CanvasMetrics = {
   offsetY: number
 }
 
-const CLASS_TABLE = [0, 0, 0, 1, 2, 3, 3, 4, 4]
 const BASE_VALUE = 1
 const STEP_VALUE = 1
+const CELL_SIZE_MIN = 12
+const CELL_SIZE_MAX = 100
+const CELL_SIZE_STEP = 2
 const GUIDE_OPTIONS: Array<{ label: string; value: GuideOption }> = [
   { label: '角线', value: '1x1' },
   { label: '十字线', value: 'cross' },
@@ -73,9 +52,11 @@ const EXTRA_GUIDE_OPTIONS: Array<{ label: string; value: GuideOption }> = [
 const ALL_GUIDE_OPTIONS = [...GUIDE_OPTIONS, ...EXTRA_GUIDE_OPTIONS]
 
 function SquareNineChart() {
-  const [rowColumn, setRowColumn] = useState(15)
+  const [rowColumn, setRowColumn] = useState(13)
   const [trend, setTrend] = useState<Trend>('down')
   const [cellSize, setCellSize] = useState(28)
+  const [autoFit, setAutoFit] = useState(true)
+  const [chartViewport, setChartViewport] = useState({ width: 0, height: 0 })
   const [searchValue, setSearchValue] = useState<number | null>(1)
   const [selectedValue, setSelectedValue] = useState(1)
   const [hoverKey, setHoverKey] = useState<string | null>(null)
@@ -83,15 +64,36 @@ function SquareNineChart() {
   const [extraGuidesOpen, setExtraGuidesOpen] = useState(false)
   const [controlsOpen, setControlsOpen] = useState(true)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const chartWrapRef = useRef<HTMLDivElement | null>(null)
+  const hoverKeyRef = useRef<string | null>(null)
+  const pendingHoverKeyRef = useRef<string | null>(null)
+  const hoverFrameRef = useRef<number | null>(null)
+  const panFrameRef = useRef<number | null>(null)
+  const loggedPointKeyRef = useRef<string | null>(null)
+  const dragStateRef = useRef({
+    active: false,
+    moved: false,
+    startX: 0,
+    startY: 0,
+    lastX: 0,
+    lastY: 0,
+    scrollLeft: 0,
+    scrollTop: 0,
+  })
+  const [isPanning, setIsPanning] = useState(false)
 
-  const loop = Math.floor(normalizeRowColumn(rowColumn) / 2)
+  const loop = normalizeLoop(rowColumn)
   const matrix = useMemo(() => generateGannMatrix(BASE_VALUE, STEP_VALUE, loop), [loop])
   const size = matrix.length
   const maxValue = size * size
+  const effectiveCellSize = useMemo(
+    () => (autoFit ? getAutoCellSize(chartViewport.width, chartViewport.height, size) : cellSize),
+    [autoFit, cellSize, chartViewport.height, chartViewport.width, size],
+  )
   const canvasSize = useMemo(() => {
-    const gridSize = size * cellSize
+    const gridSize = size * effectiveCellSize
     return { width: gridSize, height: gridSize }
-  }, [cellSize, size])
+  }, [effectiveCellSize, size])
 
   const cells = useMemo(
     () =>
@@ -117,6 +119,10 @@ function SquareNineChart() {
     () => calculateClickTrend(matrix, selectedPosition.r, selectedPosition.c, trend, { loop }),
     [loop, matrix, selectedPosition.c, selectedPosition.r, trend],
   )
+  const validationPoints = useMemo(
+    () => getTrendExtensionPoints(matrix, selectedPosition.r, selectedPosition.c, trend, { loop }),
+    [loop, matrix, selectedPosition.c, selectedPosition.r, trend],
+  )
   const mainKeys = useMemo(() => new Set(trendResult.mainLine.map((point) => `${point.r}:${point.c}`)), [trendResult])
   const crossKeys = useMemo(() => new Set(trendResult.crossLine.map((point) => `${point.r}:${point.c}`)), [trendResult])
 
@@ -139,10 +145,115 @@ function SquareNineChart() {
       const r = Math.floor(y / metrics.cellSize)
 
       if (r < 0 || r >= size || c < 0 || c >= size) return null
-      return cells.find((cell) => cell.r === r && cell.c === c) ?? null
+      const value = matrix[r]?.[c]
+      if (value === undefined) return null
+      return { r, c, value, key: `${r}:${c}` }
     },
-    [cells, size],
+    [matrix, size],
   )
+
+  const clearHoverFrame = useCallback(() => {
+    if (hoverFrameRef.current === null) return
+    window.cancelAnimationFrame(hoverFrameRef.current)
+    hoverFrameRef.current = null
+  }, [])
+
+  const scheduleHoverCell = useCallback(
+    (clientX: number, clientY: number) => {
+      const key = pickCell(clientX, clientY)?.key ?? null
+      pendingHoverKeyRef.current = key
+
+      if (hoverFrameRef.current !== null) return
+      hoverFrameRef.current = window.requestAnimationFrame(() => {
+        hoverFrameRef.current = null
+        const nextKey = pendingHoverKeyRef.current
+        if (nextKey === hoverKeyRef.current) return
+        hoverKeyRef.current = nextKey
+        setHoverKey(nextKey)
+      })
+    },
+    [pickCell],
+  )
+
+  const startPan = (clientX: number, clientY: number) => {
+    const element = chartWrapRef.current
+    if (!element) return
+    clearHoverFrame()
+    dragStateRef.current = {
+      active: true,
+      moved: false,
+      startX: clientX,
+      startY: clientY,
+      lastX: clientX,
+      lastY: clientY,
+      scrollLeft: element.scrollLeft,
+      scrollTop: element.scrollTop,
+    }
+    setIsPanning(true)
+  }
+
+  const movePan = (clientX: number, clientY: number) => {
+    const element = chartWrapRef.current
+    const state = dragStateRef.current
+    if (!element || !state.active) return false
+    state.lastX = clientX
+    state.lastY = clientY
+    const dx = clientX - state.startX
+    const dy = clientY - state.startY
+    if (Math.abs(dx) + Math.abs(dy) > 3) state.moved = true
+
+    if (panFrameRef.current === null) {
+      panFrameRef.current = window.requestAnimationFrame(() => {
+        panFrameRef.current = null
+        const frameState = dragStateRef.current
+        const target = chartWrapRef.current
+        if (!target || !frameState.active) return
+        target.scrollLeft = frameState.scrollLeft - (frameState.lastX - frameState.startX)
+        target.scrollTop = frameState.scrollTop - (frameState.lastY - frameState.startY)
+      })
+    }
+
+    return true
+  }
+
+  const stopPan = () => {
+    if (!dragStateRef.current.active) return
+    dragStateRef.current.active = false
+    setIsPanning(false)
+  }
+
+  const clearHoverCell = useCallback(() => {
+    clearHoverFrame()
+    pendingHoverKeyRef.current = null
+    if (hoverKeyRef.current !== null) {
+      hoverKeyRef.current = null
+      setHoverKey(null)
+    }
+  }, [clearHoverFrame])
+
+  const zoomChart = useCallback((event: WheelEvent<HTMLDivElement>) => {
+    if (!event.ctrlKey) return
+    event.preventDefault()
+    const element = chartWrapRef.current
+    if (!element) return
+
+    const rect = element.getBoundingClientRect()
+    const offsetX = event.clientX - rect.left
+    const offsetY = event.clientY - rect.top
+    const direction = event.deltaY < 0 ? 1 : -1
+
+    setCellSize((current) => {
+      const next = clampCellSize(effectiveCellSize + direction * CELL_SIZE_STEP)
+      if (next === effectiveCellSize) return current
+      const scale = next / effectiveCellSize
+      window.requestAnimationFrame(() => {
+        element.scrollLeft = (element.scrollLeft + offsetX) * scale - offsetX
+        element.scrollTop = (element.scrollTop + offsetY) * scale - offsetY
+      })
+      setAutoFit(false)
+      return next
+    })
+  }, [effectiveCellSize])
 
   useEffect(() => {
     if (selectedValue > maxValue) {
@@ -150,6 +261,24 @@ function SquareNineChart() {
       setSearchValue(maxValue)
     }
   }, [maxValue, selectedValue])
+
+  useEffect(() => {
+    const element = chartWrapRef.current
+    if (!element) return
+
+    const updateViewport = () => {
+      setChartViewport({
+        width: element.clientWidth,
+        height: element.clientHeight,
+      })
+    }
+
+    updateViewport()
+    const observer = new ResizeObserver(updateViewport)
+    observer.observe(element)
+
+    return () => observer.disconnect()
+  }, [controlsOpen])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -170,31 +299,60 @@ function SquareNineChart() {
     })
   }, [canvasSize, cells, crossKeys, guideOptions, hoverKey, mainKeys, selectedKey, size, trend])
 
+  useEffect(() => {
+    return () => {
+      clearHoverFrame()
+      if (panFrameRef.current !== null) window.cancelAnimationFrame(panFrameRef.current)
+    }
+  }, [clearHoverFrame])
+
+  useEffect(() => {
+    const logKey = `${selectedValue}:${trend}:${loop}`
+    if (loggedPointKeyRef.current === logKey) return
+    loggedPointKeyRef.current = logKey
+
+    console.log('九方图点位计算', {
+      点击点位: selectedValue,
+      趋势: trend,
+      主线点位: trendResult.mainLine.map((point) => point.value),
+      副线点位: trendResult.crossLine.map((point) => point.value),
+      主线延伸点: validationPoints.mainExtension.map((point) => point.value),
+      副线延伸点: validationPoints.crossExtension.map((point) => point.value),
+    })
+  }, [loop, selectedValue, trend, trendResult, validationPoints])
+
   return (
     <ConfigProvider>
-      <main className="min-h-screen bg-[#f5f5f5] p-2 sm:p-3 lg:p-4">
+      <main className="h-screen overflow-hidden bg-[#f5f5f5] p-2 sm:p-3 lg:p-4">
         <section
-          className={`grid w-full gap-3 transition-[grid-template-columns] duration-200 ${
-            controlsOpen ? 'lg:grid-cols-[360px_minmax(0,1fr)]' : 'lg:grid-cols-[minmax(48px,48px)_minmax(0,1fr)]'
+          className={`grid h-full w-full grid-rows-[auto_minmax(0,1fr)] gap-3 transition-[grid-template-columns] duration-300 ease-in-out lg:grid-rows-none ${
+            controlsOpen ? 'lg:grid-cols-[minmax(0,1fr)_360px]' : 'lg:grid-cols-[minmax(0,1fr)_150px]'
           }`}
         >
-          <aside className="order-1 flex flex-col gap-4">
+          <aside className="order-1 flex flex-col gap-4 transition-all duration-300 ease-in-out lg:order-2">
             <Card
               size="small"
               styles={{
                 body: {
-                  display: controlsOpen ? undefined : 'none',
+                  maxHeight: controlsOpen ? 'calc(100vh - 96px)' : 0,
+                  opacity: controlsOpen ? 1 : 0,
+                  overflow: controlsOpen ? 'auto' : 'hidden',
                   padding: controlsOpen ? undefined : 0,
+                  pointerEvents: controlsOpen ? undefined : 'none',
+                  transform: controlsOpen ? 'scaleY(1)' : 'scaleY(0.98)',
+                  transformOrigin: 'top',
+                  transition: 'max-height 300ms ease, opacity 180ms ease, padding 300ms ease, transform 300ms ease',
                 },
                 header: {
                   minHeight: 40,
                   paddingInline: controlsOpen ? undefined : 8,
+                  transition: 'padding 300ms ease',
                 },
               }}
               title={(
-                <Space>
+                <Space size={6}>
                   <SettingOutlined />
-                  <span>基础设置</span>
+                  <span className="whitespace-nowrap">基础参数</span>
                 </Space>
               )}
               extra={
@@ -204,7 +362,7 @@ function SquareNineChart() {
                   onClick={() => setControlsOpen((open) => !open)}
                 >
                   <span className="hidden lg:inline-flex">
-                    {controlsOpen ? <LeftOutlined /> : <RightOutlined />}
+                    {controlsOpen ? <RightOutlined /> : <LeftOutlined />}
                   </span>
                   <span className="inline-flex items-center gap-1 lg:hidden">
                     {controlsOpen ? <UpOutlined /> : <DownOutlined />}
@@ -250,19 +408,32 @@ function SquareNineChart() {
                   <Control title="行列">
                     <InputNumber
                       className="w-full"
-                      min={7}
+                      min={1}
                       max={99}
                       precision={0}
-                      step={2}
+                      step={1}
                       value={rowColumn}
-                      onChange={(value) => setRowColumn(normalizeRowColumn(value ?? 19))}
+                      onChange={(value) => setRowColumn(normalizeLoop(value ?? 9))}
                     />
                   </Control>
                 </Col>
 
-                <Col xs={24} sm={12} lg={24}>
-                  <Control title={`格子大小 ${cellSize}`}>
-                    <Slider min={12} max={100} step={2} value={cellSize} onChange={setCellSize} />
+                <Col span={24}>
+                  <Control title={`格子大小 ${effectiveCellSize}`}>
+                    <Checkbox checked={autoFit} onChange={(event) => setAutoFit(event.target.checked)}>
+                      自动适配
+                    </Checkbox>
+                    <Slider
+                      min={CELL_SIZE_MIN}
+                      max={CELL_SIZE_MAX}
+                      step={CELL_SIZE_STEP}
+                      value={effectiveCellSize}
+                      disabled={autoFit}
+                      onChange={(value) => {
+                        setAutoFit(false)
+                        setCellSize(clampCellSize(value))
+                      }}
+                    />
                   </Control>
                 </Col>
 
@@ -290,23 +461,66 @@ function SquareNineChart() {
                 </Col>
               </Row>
             </Card>
+
+            <Card
+              size="small"
+              title="点位"
+              styles={{ body: { padding: 12 } }}
+            >
+              <Space direction="vertical" size={10} className="w-full">
+                <PointArray title="主线" points={validationPoints.mainExtension} />
+                <PointArray title="副线" points={validationPoints.crossExtension} />
+              </Space>
+            </Card>
           </aside>
 
-          <section className="order-2 min-w-0">
-            <Card size="small" styles={{ body: { padding: 8 } }}>
-              <div className="overflow-auto rounded-md bg-white">
+          <section className="order-2 min-h-0 min-w-0 lg:order-1">
+            <Card
+              className="h-full"
+              size="small"
+              styles={{ body: { height: '100%', padding: 8 } }}
+            >
+              <div
+                ref={chartWrapRef}
+                className={`h-full select-none overflow-auto overscroll-contain rounded-md bg-white ${isPanning ? 'cursor-grabbing' : 'cursor-grab'}`}
+                onWheel={zoomChart}
+                onPointerDown={(event) => {
+                  if (event.button !== 0 || event.ctrlKey) return
+                  event.currentTarget.setPointerCapture(event.pointerId)
+                  startPan(event.clientX, event.clientY)
+                }}
+                onPointerMove={(event) => {
+                  if (movePan(event.clientX, event.clientY)) return
+                  scheduleHoverCell(event.clientX, event.clientY)
+                }}
+                onPointerUp={(event) => {
+                  const shouldPickCell = dragStateRef.current.active && !dragStateRef.current.moved
+                  if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                    event.currentTarget.releasePointerCapture(event.pointerId)
+                  }
+                  stopPan()
+                  if (!shouldPickCell) return
+                  const cell = pickCell(event.clientX, event.clientY)
+                  if (!cell) return
+                  setSelectedValue(cell.value)
+                  setSearchValue(cell.value)
+                }}
+                onPointerCancel={(event) => {
+                  if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+                    event.currentTarget.releasePointerCapture(event.pointerId)
+                  }
+                  stopPan()
+                  clearHoverCell()
+                }}
+                onPointerLeave={() => {
+                  if (dragStateRef.current.active) return
+                  clearHoverCell()
+                }}
+              >
                 <canvas
                   ref={canvasRef}
                   className="block touch-none"
                   style={{ width: canvasSize.width, height: canvasSize.height }}
-                  onClick={(event) => {
-                    const cell = pickCell(event.clientX, event.clientY)
-                    if (!cell) return
-                    setSelectedValue(cell.value)
-                    setSearchValue(cell.value)
-                  }}
-                  onMouseMove={(event) => setHoverKey(pickCell(event.clientX, event.clientY)?.key ?? null)}
-                  onMouseLeave={() => setHoverKey(null)}
                 />
               </div>
             </Card>
@@ -323,6 +537,29 @@ function Control({ title, children }: { title: string; children: ReactNode }) {
       <span className="text-sm font-medium text-slate-700">{title}</span>
       {children}
     </div>
+  )
+}
+
+function PointArray({ title, points }: { title: string; points: MatrixPoint[] }) {
+  return (
+    <Card
+      size="small"
+      type="inner"
+      title={title}
+      styles={{ body: { padding: 8 } }}
+    >
+      {points.length > 0 ? (
+        <Space size={[6, 6]} wrap>
+          {points.map((point) => (
+            <Tag key={`${point.r}:${point.c}:${point.value}`} color="processing" bordered={false}>
+              {point.value}
+            </Tag>
+          ))}
+        </Space>
+      ) : (
+        <span className="block py-1 text-xs text-slate-400">暂无点位</span>
+      )}
+    </Card>
   )
 }
 
@@ -390,7 +627,7 @@ function paintCellBase(
   ctx.save()
   const selectedFill = trend === 'down' ? '#ffccc7' : '#52c41a'
   const highlightFill = trend === 'down' ? '#52c41a' : '#ffccc7'
-  const hoverFill = '#e6f4ff'
+  const hoverFill = '#ffd666'
 
   for (const cell of cells) {
     const rect = cellRect(cell, metrics)
@@ -523,6 +760,20 @@ function compactValue(value: number, cellSize: number) {
   return String(value)
 }
 
+function normalizeLoop(value: number) {
+  return Math.max(1, Math.min(99, Math.trunc(Number(value) || 9)))
+}
+
+function clampCellSize(value: number) {
+  return Math.max(CELL_SIZE_MIN, Math.min(CELL_SIZE_MAX, Math.round(Number(value) / CELL_SIZE_STEP) * CELL_SIZE_STEP))
+}
+
+function getAutoCellSize(width: number, height: number, size: number) {
+  if (width <= 0 || height <= 0 || size <= 0) return CELL_SIZE_MIN
+  const fitSize = Math.floor(Math.min(width, height) / size)
+  return clampCellSize(fitSize)
+}
+
 function drawLine(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number) {
   ctx.beginPath()
   ctx.moveTo(x1, y1)
@@ -608,566 +859,6 @@ function clipLineThroughCenter(
   }
 
   return best ? { x1: best.a.x, y1: best.a.y, x2: best.b.x, y2: best.b.y } : null
-}
-
-function generateGannMatrix(base = 1, step = 1, loop = 9) {
-  const radius = Math.max(1, Number(loop) || 1)
-  const size = radius * 2 + 1
-  const max = size * size
-  const { numToPos } = buildGannSpiral(max)
-  const matrix = Array.from({ length: size }, () => Array<number>(size).fill(0))
-
-  for (let n = 1; n <= max; n += 1) {
-    const pos = numToPos.get(n)
-    if (pos) matrix[pos.row + radius][pos.col + radius] = base + (n - 1) * step
-  }
-
-  return matrix
-}
-
-function normalizeRowColumn(value: number) {
-  const normalized = Math.max(7, Math.min(99, Math.trunc(Number(value) || 19)))
-  return normalized % 2 === 0 ? normalized + 1 : normalized
-}
-
-function findNumberPosition(matrix: number[][], target: number) {
-  const value = Number(target)
-  if (!Number.isFinite(value)) return { r: -1, c: -1 }
-
-  for (let r = 0; r < matrix.length; r += 1) {
-    for (let c = 0; c < matrix[r].length; c += 1) {
-      if (Number(matrix[r][c]) === value) return { r, c }
-    }
-  }
-
-  return { r: -1, c: -1 }
-}
-
-function calculateClickTrend(
-  matrix: number[][],
-  r: number,
-  c: number,
-  trendDirection: Trend,
-  options: { base?: number; step?: number; loop?: number } = {},
-): TrendResult {
-  const clickedValue = matrix[r]?.[c] ?? 1
-  const base = Number(options.base ?? 1)
-  const step = Number(options.step ?? 1)
-  const loop = Math.max(1, Number(options.loop ?? Math.floor(matrix.length / 2)) || 1)
-  const rawIndex = step === 0 ? clickedValue : (clickedValue - base) / step + 1
-  const clickedIndex = Math.round(rawIndex)
-
-  const highlight = calcHighlights(clickedIndex, trendDirection, loop)
-  const toValue = (n: number) => base + (n - 1) * step
-  const mainValues = highlight.mainHighlight.map(toValue)
-  const crossValues = highlight.subHighlight.map(toValue)
-  const mainLine = valuesToPoints(matrix, mainValues)
-  const crossLine = valuesToPoints(matrix, crossValues)
-
-  return {
-    clickedValue,
-    clickedIndex,
-    trend: trendDirection,
-    point: highlight.point,
-    absPoint: highlight.absPoint,
-    type: highlight.type,
-    sector: highlight.sector,
-    distance: highlight.distance,
-    mainLine,
-    crossLine,
-    trendCells: [...mainLine, ...crossLine],
-  }
-}
-
-function valuesToPoints(matrix: number[][], values: number[]) {
-  const index = new Map<number, MatrixPoint>()
-  for (let r = 0; r < matrix.length; r += 1) {
-    for (let c = 0; c < matrix[r].length; c += 1) {
-      index.set(Number(matrix[r][c]), { r, c, value: matrix[r][c] })
-    }
-  }
-  return dedupe(values)
-    .map((value) => index.get(Number(value)))
-    .filter((point): point is MatrixPoint => Boolean(point))
-}
-
-function buildGannSpiral(max: number) {
-  const numToPos = new Map<number, SpiralPoint>()
-  const posToNum = new Map<string, number>()
-  let row = 0
-  let col = 0
-  let n = 1
-  setPoint(n, row, col)
-
-  const dirs = [
-    [0, -1],
-    [-1, 0],
-    [0, 1],
-    [1, 0],
-  ]
-  let stepLen = 1
-  let dirIndex = 0
-
-  while (n < max) {
-    for (let repeat = 0; repeat < 2 && n < max; repeat += 1) {
-      const [dr, dc] = dirs[dirIndex % 4]
-      for (let i = 0; i < stepLen && n < max; i += 1) {
-        row += dr
-        col += dc
-        n += 1
-        setPoint(n, row, col)
-      }
-      dirIndex += 1
-    }
-    stepLen += 1
-  }
-
-  function setPoint(value: number, pointRow: number, pointCol: number) {
-    numToPos.set(value, { row: pointRow, col: pointCol })
-    posToNum.set(`${pointRow},${pointCol}`, value)
-  }
-
-  return { numToPos, posToNum }
-}
-
-function calcHighlights(clickedValue: number, trend: Trend, gridRadius: number) {
-  const maxNumber = (gridRadius * 2 + 1) ** 2
-  const { numToPos, posToNum } = buildGannSpiral(maxNumber)
-  const point = numToPos.get(clickedValue)
-  const gridSize = gridRadius * 2 + 1
-  const center = Math.floor(gridSize / 2)
-
-  if (!point) {
-    return {
-      clickedValue,
-      trend,
-      gridRadius,
-      maxNumber,
-      mainHighlight: [] as number[],
-      subHighlight: [] as number[],
-      numToPos,
-      posToNum,
-    }
-  }
-
-  const absPoint = relToAbs(point, center)
-  const sector = getSector(absPoint, gridSize)
-  const type = getPointType(point)
-  const distance = getAxisDistance(absPoint, center, sector)
-  const trendMode = trend === 'up' ? 1 : 0
-  const ctx = {
-    clickedValue,
-    trend,
-    trendMode,
-    gridRadius,
-    maxNumber,
-    gridSize,
-    center,
-    posToNum,
-    line1: [] as number[],
-    line2: [] as number[],
-    distance,
-  }
-
-  if (type === 2) renderType2(ctx, absPoint, sector, trendMode)
-  else renderDiagonal(ctx, absPoint, sector, trendMode)
-
-  return {
-    clickedValue,
-    trend,
-    point,
-    absPoint,
-    type,
-    sector,
-    distance,
-    trendMode,
-    gridRadius,
-    maxNumber,
-    gridSize,
-    center,
-    mainHighlight: dedupe(ctx.line1),
-    subHighlight: normalizeSegment(dedupe(ctx.line2), point, trend),
-    numToPos,
-    posToNum,
-  }
-}
-
-function getValue(posToNum: Map<string, number>, row: number, col: number) {
-  return posToNum.get(`${row},${col}`)
-}
-
-function trunc(n: number) {
-  return n < 0 ? Math.ceil(n) : Math.floor(n)
-}
-
-function dedupe<T>(values: T[]) {
-  const seen = new Set<T>()
-  return values.filter((value) => {
-    if (seen.has(value)) return false
-    seen.add(value)
-    return true
-  })
-}
-
-function ptInRect(rect: { left: number; top: number; right: number; bottom: number }, p: AbsPoint) {
-  return p.x >= rect.left && p.x < rect.right && p.y >= rect.top && p.y < rect.bottom
-}
-
-function calcY(line: { k: number; b: number }, x: number) {
-  return trunc(x * line.k + line.b)
-}
-
-function classifyPointByLine(line: { k: number; b: number }, p: AbsPoint) {
-  const diff = trunc(p.x * line.k + line.b - p.y)
-  if (diff === 0) return 0
-  return diff >= 0 ? 2 : 1
-}
-
-function relToAbs(point: SpiralPoint, center: number) {
-  return { x: point.col + center, y: point.row + center }
-}
-
-function absToRel(x: number, y: number, center: number) {
-  return { row: y - center, col: x - center }
-}
-
-function absValue(ctx: { center: number; posToNum: Map<string, number> }, x: number, y: number) {
-  const rel = absToRel(x, y, ctx.center)
-  return getValue(ctx.posToNum, rel.row, rel.col)
-}
-
-function getPointType(point: SpiralPoint) {
-  const x = point.col
-  const y = point.row
-  if (x === 0 || y === 0) return 2
-
-  const dx = Math.abs(x)
-  const dy = Math.abs(y)
-  if (x < 0 && y > 0 && ((dx === 3 && dy === 5) || (dx === 4 && dy === 7))) return 1
-
-  const limit = dx > 8 ? dx - 4 : CLASS_TABLE[dx]
-  if (dy <= limit) return 2
-  if (dy < 9) return dx <= CLASS_TABLE[dy] ? 2 : 1
-  return dx <= dy - 4 ? 2 : 1
-}
-
-function getSector(absPoint: AbsPoint, gridSize: number) {
-  const x = absPoint.x
-  const y = absPoint.y
-  const rect = { left: x * 2, top: y * 2, right: x * 2 + 2, bottom: y * 2 + 2 }
-  const testPoint = { x: x * 2 + 1, y: y * 2 + 1 }
-  const lineC0 = { k: -1, b: gridSize * 2 }
-  const lineD0 = { k: 1, b: 0 }
-
-  if (ptInRect(rect, { x: testPoint.x, y: calcY(lineC0, testPoint.x) })) return 7
-  if (ptInRect(rect, { x: testPoint.x, y: calcY(lineD0, testPoint.x) })) return 6
-
-  const signC0 = classifyPointByLine(lineC0, testPoint)
-  const signD0 = classifyPointByLine(lineD0, testPoint)
-  if (signC0 === 2) return signD0 !== 1 ? 2 : 1
-  return signD0 !== 2 ? 4 : 3
-}
-
-function getAxisDistance(absPoint: AbsPoint, center: number, sector: number) {
-  const dx = Math.abs(absPoint.x - center)
-  const dy = Math.abs(absPoint.y - center)
-  if ([1, 3, 6, 7].includes(sector)) return dx
-  if ([2, 4].includes(sector)) return dy
-  return 0
-}
-
-function getMajorMinor(absPoint: AbsPoint, center: number) {
-  const dx = Math.abs(absPoint.x - center)
-  const dy = Math.abs(absPoint.y - center)
-  return { major: Math.max(dx, dy), minor: Math.min(dx, dy) }
-}
-
-function record(
-  ctx: { clickedValue: number; center: number; posToNum: Map<string, number>; line1: number[]; line2: number[] },
-  x: number,
-  y: number,
-  segment: 'current' | 'line1' | 'line2',
-) {
-  const value = absValue(ctx, x, y)
-  if (!value) return false
-
-  if (value === ctx.clickedValue) return true
-  if (segment === 'line1') ctx.line1.push(value)
-  if (segment === 'line2') ctx.line2.push(value)
-  return true
-}
-
-function normalizeSegment(values: number[], point: SpiralPoint, trend: Trend) {
-  if (trend === 'down' && point.row < 0) return values.slice().reverse()
-  return values.slice()
-}
-
-function renderType2(
-  ctx: { clickedValue: number; center: number; gridSize: number; distance: number; posToNum: Map<string, number>; line1: number[]; line2: number[] },
-  absPoint: AbsPoint,
-  sector: number,
-  trendMode: number,
-) {
-  const up = trendMode === 1
-  let x = absPoint.x
-  let y = absPoint.y
-  const d = ctx.distance
-  const c = ctx.center
-  const N = ctx.gridSize
-
-  switch (sector) {
-    case 1: {
-      const origY = y
-      const targetX = x + d
-      record(ctx, x, y, 'current')
-      if (up) {
-        for (let i = 0; i < d * 2; i += 1) record(ctx, ++x, y, 'line1')
-        y = origY - 1
-        x = targetX
-        for (let i = 0, count = origY - c + d; i < count && y >= 0; i += 1, y -= 1) record(ctx, x, y, 'line2')
-      } else {
-        for (let i = 0; i < Math.max(0, d * 2 - 1); i += 1) record(ctx, ++x, y, 'line1')
-        y = origY + 1
-        x = targetX
-        for (let i = 0, count = c - origY - 1 + d; i < count && y <= N; i += 1, y += 1) record(ctx, x, y, 'line2')
-      }
-      break
-    }
-    case 2: {
-      const origX = x
-      const targetY = y + d
-      record(ctx, x, y, 'current')
-      if (up) {
-        for (let i = 0; i < d * 2; i += 1) record(ctx, x, ++y, 'line1')
-        x = origX
-        y = targetY
-        for (let i = 0, count = d - origX + 1 + c; i < count && x < N; i += 1, x += 1) record(ctx, x, y, 'line2')
-      } else {
-        for (let i = 0; i < Math.max(0, d * 2 - 1); i += 1) record(ctx, x, ++y, 'line1')
-        x = origX
-        y = targetY
-        for (let i = 0, count = origX - c + 1 + d; i < count; i += 1, x -= 1) record(ctx, x, y, 'line2')
-      }
-      break
-    }
-    case 3: {
-      const targetX = x - d
-      const origY = y
-      record(ctx, x, y, 'current')
-      if (up) {
-        for (let i = 0; i < d * 2 + 1; i += 1) {
-          x -= 1
-          if (x < 0) break
-          record(ctx, x, y, 'line1')
-        }
-        x = targetX
-        y = origY
-        for (let i = 0, count = c - origY + 1 + d; i < count; i += 1, y += 1) record(ctx, x, y, 'line2')
-      } else {
-        for (let i = 0; i < d * 2; i += 1) record(ctx, --x, y, 'line1')
-        x = targetX
-        y = origY
-        for (let i = 0, count = origY - c + 1 + d; i < count; i += 1, y -= 1) record(ctx, x, y, 'line2')
-      }
-      break
-    }
-    case 4: {
-      const targetY = y - d
-      const origX = x
-      record(ctx, x, y, 'current')
-      if (up) {
-        for (let i = 0; i < d * 2 + 1; i += 1) {
-          y -= 1
-          if (y < 0) break
-          record(ctx, x, y, 'line1')
-        }
-        y = targetY
-        x = origX - 1
-        for (let i = 0, count = origX - c + 1 + d; i < count && x >= 0; i += 1, x -= 1) record(ctx, x, y, 'line2')
-      } else {
-        for (let i = 0; i < d * 2; i += 1) record(ctx, x, --y, 'line1')
-        x = origX + 1
-        y = targetY
-        for (let i = 0, count = c + d - origX; i < count && x <= N; i += 1, x += 1) record(ctx, x, y, 'line2')
-      }
-      break
-    }
-    default:
-      record(ctx, x, y, 'current')
-  }
-}
-
-function renderDiagLabel14614(ctx: HighlightContext, absPoint: AbsPoint, sector: number, trendMode: number, major: number, minor: number) {
-  const up = trendMode === 1
-  let { x, y } = absPoint
-  let d = ctx.distance
-  const c = ctx.center
-  const N = ctx.gridSize
-  record(ctx, x, y, 'current')
-
-  if (up) {
-    for (let i = 0, count = major + minor + (sector !== 1 ? 1 : 0); i < count; i += 1) {
-      x += 1
-      y -= 1
-      if (N <= x || y < 0) break
-      record(ctx, x, y, 'line1')
-    }
-    x = c
-    y = c
-    if (sector === 4) {
-      const diff = major - minor
-      x = c + diff
-      y = c + diff
-      d += diff + 1
-    } else if (sector !== 1) d += 1
-    for (let i = 0; i < d; i += 1) record(ctx, --x, --y, 'line2')
-  } else {
-    for (let i = 0, count = major - 1 + minor + (sector !== 1 ? 1 : 0); i < count; i += 1) {
-      x += 1
-      y -= 1
-      record(ctx, x, y, 'line1')
-    }
-    x = c
-    y = c
-    if (sector === 1) {
-      const diff = major - minor
-      x = c - diff
-      y = c - diff
-      d += diff - 1
-    }
-    for (let i = 0; i < d; i += 1) record(ctx, ++x, ++y, 'line2')
-  }
-}
-
-function renderDiagLabel14ba7(ctx: HighlightContext, absPoint: AbsPoint, sector: number, trendMode: number, major: number, minor: number) {
-  const up = trendMode === 1
-  let { x, y } = absPoint
-  let d = ctx.distance
-  const c = ctx.center
-  record(ctx, x, y, 'current')
-  for (let i = 0, count = up ? major + 1 + minor : major + minor; i < count; i += 1) record(ctx, --x, --y, 'line1')
-
-  x = c
-  y = c
-  if (up && sector === 3) {
-    const diff = major - minor
-    x = c + diff
-    y = c - diff
-    d += diff
-  }
-  if (!up && sector === 4) {
-    const diff = major - minor
-    x = c - diff
-    y = c + diff
-    d += diff
-  }
-  for (let i = 0; i < d; i += 1) {
-    if (up) record(ctx, --x, ++y, 'line2')
-    else record(ctx, ++x, --y, 'line2')
-  }
-}
-
-function renderDiagLabel149e7(ctx: HighlightContext, absPoint: AbsPoint, sector: number, trendMode: number, major: number, minor: number) {
-  const up = trendMode === 1
-  let { x, y } = absPoint
-  let d = ctx.distance
-  const c = ctx.center
-  record(ctx, x, y, 'current')
-
-  for (let i = 0, count = (up ? major + minor : major - 1 + minor) + (sector === 2 ? 1 : 0); i < count; i += 1) {
-    record(ctx, --x, ++y, 'line1')
-  }
-  x = c
-  y = c
-  if (up && sector === 2) {
-    const diff = major - minor
-    x = c - diff
-    y = c - diff
-    d += diff
-  }
-  if (!up && sector === 3) {
-    const diff = major - minor
-    x = c + diff
-    y = c + diff
-    d += diff
-  }
-  for (let i = 0; i < d; i += 1) {
-    if (up) record(ctx, ++x, ++y, 'line2')
-    else record(ctx, --x, --y, 'line2')
-  }
-}
-
-function renderDiagLabel14821(ctx: HighlightContext, absPoint: AbsPoint, sector: number, trendMode: number, major: number, minor: number) {
-  const up = trendMode === 1
-  let { x, y } = absPoint
-  let d = ctx.distance
-  const c = ctx.center
-  record(ctx, x, y, 'current')
-
-  for (let i = 0, count = up ? major + minor : major - 1 + minor; i < count; i += 1) record(ctx, ++x, ++y, 'line1')
-  x = c
-  y = c
-  if (up && sector === 1) {
-    const diff = major - minor
-    x = c - diff
-    y = c + diff
-    d += diff
-    for (let i = 0; i < d; i += 1) record(ctx, ++x, --y, 'line2')
-    return
-  }
-  if (!up && sector === 2) {
-    const diff = major - minor
-    x = c + diff
-    y = c - diff
-    d += diff
-  }
-  if (!up) {
-    while ((d -= 1) !== 0) record(ctx, --x, ++y, 'line2')
-    return
-  }
-  for (let i = 0; i < d; i += 1) record(ctx, ++x, --y, 'line2')
-}
-
-type HighlightContext = {
-  clickedValue: number
-  center: number
-  gridSize: number
-  distance: number
-  posToNum: Map<string, number>
-  line1: number[]
-  line2: number[]
-}
-
-function renderDiagonal(ctx: HighlightContext, absPoint: AbsPoint, sector: number, trendMode: number) {
-  const { major, minor } = getMajorMinor(absPoint, ctx.center)
-  const { x, y } = absPoint
-  const c = ctx.center
-
-  if (sector === 1) {
-    if (c < y) return renderDiagLabel14614(ctx, absPoint, sector, trendMode, major, minor)
-    if (y < c) return renderDiagLabel14821(ctx, absPoint, sector, trendMode, major, minor)
-  }
-  if (sector === 4) {
-    if (x < c) return renderDiagLabel14614(ctx, absPoint, sector, trendMode, major, minor)
-    if (c < x) return renderDiagLabel14ba7(ctx, absPoint, sector, trendMode, major, minor)
-  }
-  if (sector === 7) {
-    if (x < c) return renderDiagLabel14614(ctx, absPoint, sector, trendMode, major, minor)
-    if (c < x) return renderDiagLabel149e7(ctx, absPoint, sector, trendMode, major, minor)
-  }
-  if (sector === 2) {
-    if (c <= x) return renderDiagLabel149e7(ctx, absPoint, sector, trendMode, major, minor)
-    return renderDiagLabel14821(ctx, absPoint, sector, trendMode, major, minor)
-  }
-  if (sector === 6) {
-    if (x < c) return renderDiagLabel14821(ctx, absPoint, sector, trendMode, major, minor)
-    if (c < x) return renderDiagLabel14ba7(ctx, absPoint, sector, trendMode, major, minor)
-  }
-  if (sector === 3) {
-    if (c <= y) return renderDiagLabel14ba7(ctx, absPoint, sector, trendMode, major, minor)
-    return renderDiagLabel149e7(ctx, absPoint, sector, trendMode, major, minor)
-  }
-  return undefined
 }
 
 export default SquareNineChart
