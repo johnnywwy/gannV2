@@ -12,8 +12,37 @@
 
 body {
   margin: 0;
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
 }
 
 * {
   box-sizing: border-box;
+}
+
+#root {
+  min-height: 100vh;
+  width: 100%;
+}
+
+.page-route {
+  animation: page-route-enter 220ms ease-out both;
+}
+
+@keyframes page-route-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-route {
+    animation: none;
+  }
 }
