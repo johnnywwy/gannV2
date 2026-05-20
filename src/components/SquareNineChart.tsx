@@ -90,6 +90,7 @@ function SquareNineChart() {
   ]);
   const [extraGuidesOpen, setExtraGuidesOpen] = useState(false);
   const [controlsOpen, setControlsOpen] = useState(true);
+  const [validationOpen, setValidationOpen] = useState(true);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const chartWrapRef = useRef<HTMLDivElement | null>(null);
   const hoverKeyRef = useRef<string | null>(null);
@@ -620,17 +621,38 @@ function SquareNineChart() {
               </Row>
             </Card>
 
-            <Card size="small" title="点位" styles={{ body: { padding: 12 } }}>
-              <Space direction="vertical" size={10} className="w-full">
-                <PointArray
-                  title="主线"
-                  points={validationPoints.mainExtension}
-                />
-                <PointArray
-                  title="副线"
-                  points={validationPoints.crossExtension}
-                />
-              </Space>
+            <Card
+              size="small"
+              title="验证点位"
+              extra={
+                <Button
+                  size="small"
+                  type="text"
+                  onClick={() => setValidationOpen((open) => !open)}
+                >
+                  {validationOpen ? <UpOutlined /> : <DownOutlined />}
+                </Button>
+              }
+              styles={{ body: { padding: 12 } }}
+            >
+              <div
+                className="overflow-hidden transition-all duration-300 ease-in-out"
+                style={{
+                  maxHeight: validationOpen ? 260 : 0,
+                  opacity: validationOpen ? 1 : 0,
+                }}
+              >
+                <Space direction="vertical" size={10} className="w-full">
+                  <PointArray
+                    title="主线验证点位"
+                    points={validationPoints.mainExtension}
+                  />
+                  <PointArray
+                    title="副线验证点位"
+                    points={validationPoints.crossExtension}
+                  />
+                </Space>
+              </div>
             </Card>
           </aside>
 
