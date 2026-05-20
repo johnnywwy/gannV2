@@ -1,17 +1,18 @@
 import {
-  BarChartOutlined,
-  BorderOutlined,
+  BorderHorizontalOutlined,
+  BorderVerticleOutlined,
   ClearOutlined,
-  ColumnHeightOutlined,
-  CompressOutlined,
   DeleteOutlined,
+  DollarOutlined,
   EyeOutlined,
-  LineChartOutlined,
+  FunctionOutlined,
+  GatewayOutlined,
+  LineOutlined,
   LockOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  RiseOutlined,
   SettingOutlined,
-  SlidersOutlined,
   StockOutlined,
 } from "@ant-design/icons";
 import {
@@ -19,6 +20,7 @@ import {
   Card,
   Divider,
   Dropdown,
+  Input,
   InputNumber,
   Popover,
   Select,
@@ -33,18 +35,32 @@ import {
 import {
   dispose,
   init,
+  registerIndicator,
   registerOverlay,
   type Chart,
   type DataLoadMore,
   type DataLoadType,
+  type IndicatorTemplate,
   type KLineData,
   type OverlayCreate,
   type OverlayTemplate,
   type Period,
 } from "klinecharts";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { saveGannBridgeSelection } from "../utils/gannBridge";
-import type { Trend } from "../utils/squareNine";
+import {
+  GANN_PROJECTION_EVENT,
+  readGannProjectionResult,
+  saveGannBridgeSelection,
+  saveGannProjectionResult,
+  type GannProjectionPayload,
+} from "../utils/gannBridge";
+import { readKLineActiveSymbol, saveKLineActiveSymbol } from "../utils/kLineStore";
+import {
+  findNumberPosition,
+  generateGannMatrix,
+  getTrendExtensionPoints,
+  type Trend,
+} from "../utils/squareNine";
 
 type PeriodOption = {
   label: string;
@@ -71,6 +87,22 @@ type TurningPoint = {
 type TurningPointMarkerData = {
   kind: TurningPointKind;
   label: string;
+};
+
+type ProjectionLineData = {
+  kind: "main" | "cross";
+  label: string;
+};
+
+type BuySellSignalData = {
+  text: string;
+  side: "buy" | "sell";
+};
+
+type LmacdData = {
+  diff?: number;
+  dea?: number;
+  macd?: number;
 };
 
 type TurningPointHover = TurningPoint & {
@@ -116,7 +148,14 @@ const HISTORY_LOAD_DEBOUNCE_MS = 280;
 const REQUEST_NOW_BUCKET_MS = 30_000;
 const MARKET_REQUEST_CACHE_MS = 20_000;
 const MAX_SCROLL_DISTANCE = 10_000_000;
+const KLINE_RIGHT_OFFSET = 96;
+const KLINE_MAX_RIGHT_OFFSET = 720;
 const TREND_TURNING_GROUP_ID = "trend-turning-points";
+const GANN_PROJECTION_GROUP_ID = "gann-projection-lines";
+const BUY_SELL_SIGNAL_GROUP_ID = "buy-sell-signals";
+const BUY_SELL_SIGNAL_INDICATOR = "BUYSELL";
+const GANN_PROJECTION_LOOP = 9;
+const GANN_PROJECTION_POINT_LIMIT = 10;
 const DEFAULT_TURNING_THRESHOLD = 1.8;
 const stockCategoryOptions = [
   { label: "美股", value: "us" },
@@ -150,29 +189,63 @@ const periodOptions: PeriodOption[] = [
 ];
 
 const mainIndicators = ["MA", "EMA", "BOLL"];
-const paneIndicators = ["VOL", "MACD", "KDJ", "RSI", "WR"];
+const paneIndicators = ["VOL", "MACD", "LMACD", BUY_SELL_SIGNAL_INDICATOR, "KDJ", "RSI", "WR"];
+const drawablePaneIndicators = paneIndicators.filter(
+  (name) => name !== BUY_SELL_SIGNAL_INDICATOR,
+);
 const adjustOptions: Array<{ label: string; value: AdjustType }> = [
   { label: "除权", value: 0 },
   { label: "前复权", value: 1 },
 ];
 
 const drawingTools: DrawingTool[] = [
-  { label: "趋势线", icon: <LineChartOutlined />, overlay: "segment" },
-  { label: "射线", icon: <CompressOutlined />, overlay: "rayLine" },
+  { label: "趋势线", icon: <LineOutlined />, overlay: "segment" },
+  { label: "射线", icon: <RiseOutlined />, overlay: "rayLine" },
   {
     label: "水平线",
-    icon: <ColumnHeightOutlined />,
+    icon: <BorderHorizontalOutlined />,
     overlay: "horizontalStraightLine",
   },
   {
     label: "垂直线",
-    icon: <MenuFoldOutlined />,
+    icon: <BorderVerticleOutlined />,
     overlay: "verticalStraightLine",
   },
-  { label: "价格线", icon: <SlidersOutlined />, overlay: "priceLine" },
-  { label: "价格通道", icon: <BorderOutlined />, overlay: "priceChannelLine" },
-  { label: "斐波那契", icon: <BarChartOutlined />, overlay: "fibonacciLine" },
+  { label: "价格线", icon: <DollarOutlined />, overlay: "priceLine" },
+  { label: "价格通道", icon: <GatewayOutlined />, overlay: "priceChannelLine" },
+  { label: "斐波那契", icon: <FunctionOutlined />, overlay: "fibonacciLine" },
 ];
+
+const turningPointTheme: Record<
+  TurningPointKind,
+  {
+    textColor: string;
+    backgroundColor: string;
+    borderColor: string;
+    lineColor: string;
+    popupShadow: string;
+  }
+> = {
+  // 文字统一黑色；高点/低点只通过标注背景色区分。
+  high: {
+    textColor: "#111827",
+    backgroundColor: "rgba(242, 54, 69, 0.18)",
+    borderColor: "rgba(242, 54, 69, 0.78)",
+    lineColor: "rgba(242, 54, 69, 0.42)",
+    popupShadow: "0 12px 30px rgba(242, 54, 69, 0.12)",
+  },
+  low: {
+    textColor: "#111827",
+    backgroundColor: "rgba(8, 153, 129, 0.18)",
+    borderColor: "rgba(8, 153, 129, 0.78)",
+    lineColor: "rgba(8, 153, 129, 0.42)",
+    popupShadow: "0 12px 30px rgba(8, 153, 129, 0.12)",
+  },
+};
+
+function getTurningPointTheme(kind: TurningPointKind) {
+  return turningPointTheme[kind];
+}
 
 const trendTurnMarkerOverlay: OverlayTemplate<TurningPointMarkerData> = {
   name: "trendTurnMarker",
@@ -182,9 +255,9 @@ const trendTurnMarkerOverlay: OverlayTemplate<TurningPointMarkerData> = {
   needDefaultYAxisFigure: false,
   createPointFigures: ({ overlay, coordinates }) => {
     const coordinate = coordinates[0];
-    const data = overlay.extendData;
+    const data = overlay.extendData as TurningPointMarkerData;
     const isHigh = data.kind === "high";
-    const color = isHigh ? "#f23645" : "#089981";
+    const theme = getTurningPointTheme(data.kind);
     const width = Math.max(48, data.label.length * 11 + 16);
     const height = 22;
     const y = coordinate.y + (isHigh ? -34 : 12);
@@ -199,8 +272,9 @@ const trendTurnMarkerOverlay: OverlayTemplate<TurningPointMarkerData> = {
           height,
         },
         styles: {
-          color: isHigh ? "rgba(255, 241, 240, 0.96)" : "rgba(230, 244, 255, 0.96)",
-          borderColor: color,
+          style: "fill",
+          color: theme.backgroundColor,
+          borderColor: theme.borderColor,
           borderSize: 1,
           borderRadius: 6,
         },
@@ -216,9 +290,19 @@ const trendTurnMarkerOverlay: OverlayTemplate<TurningPointMarkerData> = {
           baseline: "middle",
         },
         styles: {
-          color,
+          // 注意：KLineCharts 的 text 图形默认自带蓝色 backgroundColor/borderColor。
+          // 这里必须显式清掉，否则会看到一层蓝色框包住“高点/低点”。
+          color: theme.textColor,
           size: 11,
           weight: "600",
+          backgroundColor: "transparent",
+          borderColor: "transparent",
+          borderSize: 0,
+          borderRadius: 0,
+          paddingLeft: 0,
+          paddingRight: 0,
+          paddingTop: 0,
+          paddingBottom: 0,
         },
         ignoreEvent: true,
       },
@@ -228,6 +312,188 @@ const trendTurnMarkerOverlay: OverlayTemplate<TurningPointMarkerData> = {
 
 registerOverlay(trendTurnMarkerOverlay);
 
+const gannProjectionLineOverlay: OverlayTemplate<ProjectionLineData> = {
+  name: "gannProjectionLine",
+  totalStep: 1,
+  needDefaultPointFigure: false,
+  needDefaultXAxisFigure: false,
+  needDefaultYAxisFigure: false,
+  createPointFigures: ({ overlay, coordinates, bounding }) => {
+    const coordinate = coordinates[0];
+    const isMain = overlay.extendData.kind === "main";
+    const color = isMain ? "#1677ff" : "#fa8c16";
+    return [
+      {
+        type: "line",
+        attrs: {
+          coordinates: [
+            { x: 0, y: coordinate.y },
+            { x: bounding.width, y: coordinate.y },
+          ],
+        },
+        styles: {
+          color,
+          size: 2,
+          style: "dashed",
+          dashedValue: isMain ? [6, 4] : [3, 4],
+        },
+        ignoreEvent: true,
+      },
+      {
+        type: "text",
+        attrs: {
+          x: 8,
+          y: coordinate.y - 8,
+          text: overlay.extendData.label,
+          align: "left",
+          baseline: "bottom",
+        },
+        styles: {
+          color,
+          size: 14,
+          weight: "600",
+          backgroundColor: "rgba(255,255,255,0.88)",
+          borderRadius: 4,
+          paddingLeft: 5,
+          paddingRight: 5,
+          paddingTop: 2,
+          paddingBottom: 2,
+        },
+        ignoreEvent: true,
+      },
+    ];
+  },
+};
+
+registerOverlay(gannProjectionLineOverlay);
+
+const buySellSignalOverlay: OverlayTemplate<BuySellSignalData> = {
+  name: "buySellSignal",
+  totalStep: 1,
+  needDefaultPointFigure: false,
+  needDefaultXAxisFigure: false,
+  needDefaultYAxisFigure: false,
+  createPointFigures: ({ overlay, coordinates }) => {
+    const coordinate = coordinates[0];
+    const data = overlay.extendData as BuySellSignalData;
+    const isBuy = data.side === "buy";
+    const backgroundColor = isBuy
+      ? "rgba(8, 153, 129, 0.14)"
+      : "rgba(242, 54, 69, 0.14)";
+    const borderColor = isBuy ? "rgba(8, 153, 129, 0.72)" : "rgba(242, 54, 69, 0.72)";
+    const y = coordinate.y + (isBuy ? 18 : -18);
+
+    return [
+      {
+        type: "text",
+        attrs: {
+          x: coordinate.x,
+          y,
+          text: data.text,
+          align: "center",
+          baseline: "middle",
+        },
+        styles: {
+          color: "#9d174d",
+          size: 12,
+          weight: "700",
+          backgroundColor,
+          borderColor,
+          borderSize: 1,
+          borderRadius: 6,
+          paddingLeft: 6,
+          paddingRight: 6,
+          paddingTop: 3,
+          paddingBottom: 3,
+        },
+        ignoreEvent: true,
+      },
+    ];
+  },
+};
+
+registerOverlay(buySellSignalOverlay);
+
+const lmacdIndicator: IndicatorTemplate<LmacdData, number> = {
+  name: "LMACD",
+  shortName: "LMACD",
+  calcParams: [12, 26, 9],
+  figures: [
+    { key: "diff", title: "DIFF: ", type: "line" },
+    { key: "dea", title: "DEA: ", type: "line" },
+    {
+      key: "macd",
+      title: "MACD: ",
+      type: "bar",
+      baseValue: 0,
+      styles: ({ data, defaultStyles }) => {
+        const currentMacd = data.current?.macd ?? 0;
+        const prevMacd = data.prev?.macd ?? currentMacd;
+        const fallbackBars = defaultStyles?.bars ?? [];
+        const upColor = fallbackBars[0]?.upColor ?? "#f23645";
+        const downColor = fallbackBars[0]?.downColor ?? "#089981";
+        const noChangeColor = fallbackBars[0]?.noChangeColor ?? "#888888";
+        const color =
+          currentMacd > 0 ? upColor : currentMacd < 0 ? downColor : noChangeColor;
+
+        return {
+          color,
+          borderColor: color,
+          style: prevMacd < currentMacd ? "stroke" : "fill",
+        };
+      },
+    },
+  ],
+  calc: (dataList, indicator) => {
+    const [shortPeriod, longPeriod, signalPeriod] = indicator.calcParams;
+    const maxPeriod = Math.max(shortPeriod, longPeriod);
+    let closeSum = 0;
+    let emaShort = 0;
+    let emaLong = 0;
+    let diff = 0;
+    let diffSum = 0;
+    let dea = 0;
+
+    return dataList.map((bar, index) => {
+      const item: LmacdData = {};
+      const close = Number(bar.close);
+      closeSum += close;
+
+      if (index >= shortPeriod - 1) {
+        emaShort =
+          index > shortPeriod - 1
+            ? (2 * close + (shortPeriod - 1) * emaShort) / (shortPeriod + 1)
+            : closeSum / shortPeriod;
+      }
+
+      if (index >= longPeriod - 1) {
+        emaLong =
+          index > longPeriod - 1
+            ? (2 * close + (longPeriod - 1) * emaLong) / (longPeriod + 1)
+            : closeSum / longPeriod;
+      }
+
+      if (index >= maxPeriod - 1) {
+        diff = emaShort - emaLong;
+        item.diff = diff;
+        diffSum += diff;
+        if (index >= maxPeriod + signalPeriod - 2) {
+          dea =
+            index > maxPeriod + signalPeriod - 2
+              ? (diff * 2 + dea * (signalPeriod - 1)) / (signalPeriod + 1)
+              : diffSum / signalPeriod;
+          item.dea = dea;
+          item.macd = (diff - dea) * 2;
+        }
+      }
+
+      return item;
+    });
+  },
+};
+
+registerIndicator(lmacdIndicator);
+
 function KLineChartPage() {
   const chartHostRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<Chart | null>(null);
@@ -235,14 +501,20 @@ function KLineChartPage() {
   const turningPointsRef = useRef<TurningPoint[]>([]);
   const showTurningPointsRef = useRef(true);
   const turningThresholdRef = useRef(DEFAULT_TURNING_THRESHOLD);
-  const [activeSymbol, setActiveSymbol] = useState<WatchSymbol>(defaultSymbol);
+  const projectionRef = useRef<GannProjectionPayload | null>(null);
+  const projectionLineVisibleRef = useRef({ main: true, cross: false });
+  const paneIndicatorsRef = useRef<string[]>(["RSI"]);
+  const [activeSymbol, setActiveSymbol] = useState<WatchSymbol>(() => ({
+    ...defaultSymbol,
+    ticker: readKLineActiveSymbol()?.ticker ?? defaultSymbol.ticker,
+  }));
   const [watchSymbols, setWatchSymbols] =
     useState<WatchSymbol[]>([]);
   const [watchlistLoading, setWatchlistLoading] = useState(false);
   const [watchlistError, setWatchlistError] = useState<string | null>(null);
   const [periodValue, setPeriodValue] = useState("1d");
   const [mainIndicator, setMainIndicator] = useState("MA");
-  const [paneIndicator, setPaneIndicator] = useState("VOL");
+  const [selectedPaneIndicators, setSelectedPaneIndicators] = useState<string[]>(["RSI"]);
   const [drawingTool, setDrawingTool] = useState<string | null>(null);
   const [zoomEnabled, setZoomEnabled] = useState(true);
   const [scrollEnabled, setScrollEnabled] = useState(true);
@@ -250,7 +522,10 @@ function KLineChartPage() {
   const [watchlistCollapsed, setWatchlistCollapsed] = useState(false);
   const [showTurningPoints, setShowTurningPoints] = useState(true);
   const [turningThreshold, setTurningThreshold] = useState(DEFAULT_TURNING_THRESHOLD);
-  const [turningHover, setTurningHover] = useState<TurningPointHover | null>(null);
+  const [showMainProjection, setShowMainProjection] = useState(true);
+  const [showCrossProjection, setShowCrossProjection] = useState(true);
+  const [selectedTurningPoint, setSelectedTurningPoint] =
+    useState<TurningPointHover | null>(null);
   const [loadingCount, setLoadingCount] = useState(0);
   const [loadingText, setLoadingText] = useState("正在加载 K 线数据");
   const [adjustType, setAdjustType] = useState<AdjustType>(1);
@@ -280,7 +555,10 @@ function KLineChartPage() {
         if (stocks.length > 0) {
           setWatchSymbols(stocks);
           setActiveSymbol((current) => {
-            const matched = stocks.find((item) => item.ticker === current.ticker);
+            const storedTicker = readKLineActiveSymbol()?.ticker;
+            const matched = stocks.find(
+              (item) => item.ticker === (storedTicker ?? current.ticker),
+            );
             return matched ?? stocks[0];
           });
         }
@@ -411,13 +689,21 @@ function KLineChartPage() {
               showTurningPointsRef.current,
               turningThresholdRef.current,
             );
+            renderBuySellSignalOverlays(
+              chart,
+              marketBarsRef.current,
+              paneIndicatorsRef.current.includes(BUY_SELL_SIGNAL_INDICATOR),
+            );
           } catch (error) {
             console.warn("K line api failed", error);
             if (type === "init") {
               marketBarsRef.current = [];
               turningPointsRef.current = [];
-              setTurningHover(null);
+              setSelectedTurningPoint(null);
               chart.removeOverlay({ groupId: TREND_TURNING_GROUP_ID });
+              chart.removeOverlay({ groupId: GANN_PROJECTION_GROUP_ID });
+              chart.removeOverlay({ groupId: BUY_SELL_SIGNAL_GROUP_ID });
+              projectionRef.current = null;
             }
             callback([], {
               backward: false,
@@ -445,9 +731,9 @@ function KLineChartPage() {
     chart.setSymbol(activeSymbol);
     chart.setPeriod(activePeriod.period);
     chart.createIndicator("MA", true, { id: "candle_pane" });
-    chart.setOffsetRightDistance(24);
-    chart.setLeftMinVisibleBarCount(0);
     chart.setMaxOffsetLeftDistance(MAX_SCROLL_DISTANCE);
+    chart.setMaxOffsetRightDistance(KLINE_MAX_RIGHT_OFFSET);
+    chart.setOffsetRightDistance(KLINE_RIGHT_OFFSET);
 
     const observer = new ResizeObserver(() => chart.resize());
     observer.observe(host);
@@ -465,10 +751,14 @@ function KLineChartPage() {
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
+    saveKLineActiveSymbol(activeSymbol);
     marketBarsRef.current = [];
     turningPointsRef.current = [];
-    setTurningHover(null);
+    setSelectedTurningPoint(null);
     chart.removeOverlay({ groupId: TREND_TURNING_GROUP_ID });
+    chart.removeOverlay({ groupId: GANN_PROJECTION_GROUP_ID });
+    chart.removeOverlay({ groupId: BUY_SELL_SIGNAL_GROUP_ID });
+    projectionRef.current = null;
     chart.setSymbol(activeSymbol);
     chart.resetData();
   }, [activeSymbol]);
@@ -481,8 +771,11 @@ function KLineChartPage() {
     }
     marketBarsRef.current = [];
     turningPointsRef.current = [];
-    setTurningHover(null);
+    setSelectedTurningPoint(null);
     chartRef.current?.removeOverlay({ groupId: TREND_TURNING_GROUP_ID });
+    chartRef.current?.removeOverlay({ groupId: GANN_PROJECTION_GROUP_ID });
+    chartRef.current?.removeOverlay({ groupId: BUY_SELL_SIGNAL_GROUP_ID });
+    projectionRef.current = null;
     chartRef.current?.resetData();
   }, [adjustType]);
 
@@ -495,8 +788,11 @@ function KLineChartPage() {
     }
     marketBarsRef.current = [];
     turningPointsRef.current = [];
-    setTurningHover(null);
+    setSelectedTurningPoint(null);
     chart.removeOverlay({ groupId: TREND_TURNING_GROUP_ID });
+    chart.removeOverlay({ groupId: GANN_PROJECTION_GROUP_ID });
+    chart.removeOverlay({ groupId: BUY_SELL_SIGNAL_GROUP_ID });
+    projectionRef.current = null;
     chart.setPeriod(activePeriod.period);
     chart.resetData();
   }, [activePeriod]);
@@ -513,15 +809,29 @@ function KLineChartPage() {
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
-    paneIndicators.forEach((name) =>
+    paneIndicatorsRef.current = selectedPaneIndicators;
+    drawablePaneIndicators.forEach((name) =>
       chart.removeIndicator({ name, paneId: "indicator_pane" }),
     );
-    chart.createIndicator(paneIndicator, false, {
-      id: "indicator_pane",
-      height: 116,
-      minHeight: 80,
-    });
-  }, [paneIndicator]);
+    selectedPaneIndicators
+      .filter((name) => name !== BUY_SELL_SIGNAL_INDICATOR)
+      .forEach((name) => {
+        chart.createIndicator(name, false, {
+          id: "indicator_pane",
+          height: 116,
+          minHeight: 80,
+        });
+      });
+    renderBuySellSignalOverlays(
+      chart,
+      marketBarsRef.current,
+      selectedPaneIndicators.includes(BUY_SELL_SIGNAL_INDICATOR),
+    );
+  }, [selectedPaneIndicators]);
+
+  useEffect(() => {
+    paneIndicatorsRef.current = selectedPaneIndicators;
+  }, [selectedPaneIndicators]);
 
   useEffect(() => {
     const chart = chartRef.current;
@@ -536,6 +846,44 @@ function KLineChartPage() {
   }, [scrollEnabled]);
 
   useEffect(() => {
+    const storedProjection = readGannProjectionResult();
+    if (storedProjection) {
+      projectionRef.current = storedProjection;
+      renderGannProjectionLines(
+        chartRef.current,
+        storedProjection,
+        projectionLineVisibleRef.current,
+      );
+    }
+
+    const handleProjection = (event: Event) => {
+      const detail = (event as CustomEvent<GannProjectionPayload>).detail;
+      if (!detail) return;
+      projectionRef.current = detail;
+      renderGannProjectionLines(
+        chartRef.current,
+        detail,
+        projectionLineVisibleRef.current,
+      );
+    };
+
+    window.addEventListener(GANN_PROJECTION_EVENT, handleProjection);
+    return () =>
+      window.removeEventListener(GANN_PROJECTION_EVENT, handleProjection);
+  }, []);
+
+  useEffect(() => {
+    const visible = {
+      main: showMainProjection,
+      cross: showCrossProjection,
+    };
+    projectionLineVisibleRef.current = visible;
+    if (projectionRef.current) {
+      renderGannProjectionLines(chartRef.current, projectionRef.current, visible);
+    }
+  }, [showMainProjection, showCrossProjection]);
+
+  useEffect(() => {
     showTurningPointsRef.current = showTurningPoints;
     turningThresholdRef.current = turningThreshold;
     const chart = chartRef.current;
@@ -546,7 +894,7 @@ function KLineChartPage() {
       showTurningPoints,
       turningThreshold,
     );
-    setTurningHover(null);
+    setSelectedTurningPoint(null);
   }, [showTurningPoints, turningThreshold]);
 
   const createOverlay = (tool: DrawingTool) => {
@@ -563,29 +911,50 @@ function KLineChartPage() {
     setDrawingTool(null);
   };
 
-  const handleChartMouseMove = (event: React.MouseEvent<HTMLDivElement>) => {
+  const handleChartClick = (event: React.MouseEvent<HTMLDivElement>) => {
     const chart = chartRef.current;
     const host = chartHostRef.current;
     if (!chart || !host || turningPointsRef.current.length === 0) {
-      setTurningHover(null);
+      setSelectedTurningPoint(null);
       return;
     }
 
     const rect = host.getBoundingClientRect();
     const x = event.clientX - rect.left;
     const y = event.clientY - rect.top;
-    const match = findHoveredTurningPoint(chart, turningPointsRef.current, x, y);
-    setTurningHover(match);
+    const match = findTurningPointByPixel(chart, turningPointsRef.current, x, y);
+
+    if (match) {
+      setSelectedTurningPoint(match);
+      return;
+    }
+
+    setSelectedTurningPoint(null);
   };
 
   const handleTrendSelect = (trend: Trend) => {
-    if (!turningHover) return;
+    if (!selectedTurningPoint) return;
+    const source = `${activeSymbol.ticker} ${
+      selectedTurningPoint.kind === "high" ? "高点" : "低点"
+    }`;
     saveGannBridgeSelection({
-      value: turningHover.roundedValue,
+      value: selectedTurningPoint.roundedValue,
       trend,
-      source: `${activeSymbol.ticker} ${turningHover.kind === "high" ? "高点" : "低点"}`,
+      source,
     });
-    setTurningHover(null);
+    const projection = calculateGannProjectionFromPrice(
+      selectedTurningPoint.roundedValue,
+      trend,
+      source,
+    );
+    projectionRef.current = projection as GannProjectionPayload;
+    renderGannProjectionLines(
+      chartRef.current,
+      projection,
+      projectionLineVisibleRef.current,
+    );
+    saveGannProjectionResult(projection);
+    setSelectedTurningPoint(null);
   };
 
   return (
@@ -606,20 +975,24 @@ function KLineChartPage() {
             symbol={activeSymbol}
             periodValue={periodValue}
             mainIndicator={mainIndicator}
-            paneIndicator={paneIndicator}
+            selectedPaneIndicators={selectedPaneIndicators}
             zoomEnabled={zoomEnabled}
             scrollEnabled={scrollEnabled}
             showTools={showTools}
             showTurningPoints={showTurningPoints}
             turningThreshold={turningThreshold}
+            showMainProjection={showMainProjection}
+            showCrossProjection={showCrossProjection}
             onPeriodChange={setPeriodValue}
             onMainIndicatorChange={setMainIndicator}
-            onPaneIndicatorChange={setPaneIndicator}
+            onPaneIndicatorsChange={setSelectedPaneIndicators}
             onZoomEnabledChange={setZoomEnabled}
             onScrollEnabledChange={setScrollEnabled}
             onShowToolsChange={setShowTools}
             onShowTurningPointsChange={setShowTurningPoints}
             onTurningThresholdChange={setTurningThreshold}
+            onShowMainProjectionChange={setShowMainProjection}
+            onShowCrossProjectionChange={setShowCrossProjection}
             adjustType={adjustType}
             onAdjustTypeChange={setAdjustType}
           />
@@ -633,31 +1006,15 @@ function KLineChartPage() {
             />
             <div
               className="relative min-w-0 flex-1 bg-white"
-              onMouseMove={handleChartMouseMove}
-              onMouseLeave={() => setTurningHover(null)}
+              onClick={handleChartClick}
             >
               <div ref={chartHostRef} className="h-full w-full" />
-              {turningHover && (
-                <div
-                  className="absolute z-20 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm"
-                  style={{
-                    left: Math.min(turningHover.x + 12, 520),
-                    top: Math.max(8, turningHover.y - 20),
-                  }}
-                >
-                  <div className="mb-2 text-xs font-medium text-slate-700">
-                    {turningHover.kind === "high" ? "高点" : "低点"}{" "}
-                    {turningHover.roundedValue}
-                  </div>
-                  <Space size={6}>
-                    <Button size="small" type="primary" onClick={() => handleTrendSelect("up")}>
-                      推上升
-                    </Button>
-                    <Button size="small" danger onClick={() => handleTrendSelect("down")}>
-                      推下降
-                    </Button>
-                  </Space>
-                </div>
+              {selectedTurningPoint && (
+                <TurningPointActionPopup
+                  point={selectedTurningPoint}
+                  onClose={() => setSelectedTurningPoint(null)}
+                  onTrendSelect={handleTrendSelect}
+                />
               )}
               {loadingCount > 0 && (
                 <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center bg-white/38 backdrop-blur-[1px]">
@@ -674,44 +1031,110 @@ function KLineChartPage() {
   );
 }
 
+
+function TurningPointActionPopup({
+  point,
+  onClose,
+  onTrendSelect,
+}: {
+  point: TurningPointHover;
+  onClose: () => void;
+  onTrendSelect: (trend: Trend) => void;
+}) {
+  const title = point.kind === "high" ? "高点" : "低点";
+  const theme = getTurningPointTheme(point.kind);
+  const popupLeft = point.x + 18;
+  const popupTop = Math.max(8, point.y - 36);
+
+  return (
+    <div
+      className="absolute z-20 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm"
+      style={{
+        left: popupLeft,
+        top: popupTop,
+        boxShadow: theme.popupShadow,
+      }}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <div
+        className="mb-2 flex items-center justify-between gap-3 text-xs font-medium"
+        style={{ color: theme.textColor }}
+      >
+        <span>
+          {title} {point.roundedValue}
+        </span>
+        <Button size="small" type="text" onClick={onClose}>
+          ×
+        </Button>
+      </div>
+      <Space size={6}>
+        <Button
+          size="small"
+          type="primary"
+          danger
+          onClick={() => onTrendSelect("up")}
+        >
+          推上升
+        </Button>
+        <Button
+          size="small"
+          type="primary"
+          className="bg-[#089981]"
+          onClick={() => onTrendSelect("down")}
+        >
+          推下降
+        </Button>
+      </Space>
+    </div>
+  );
+}
+
 function TopToolbar({
   symbol,
   periodValue,
   mainIndicator,
-  paneIndicator,
+  selectedPaneIndicators,
   zoomEnabled,
   scrollEnabled,
   showTools,
   showTurningPoints,
   turningThreshold,
+  showMainProjection,
+  showCrossProjection,
   onPeriodChange,
   onMainIndicatorChange,
-  onPaneIndicatorChange,
+  onPaneIndicatorsChange,
   onZoomEnabledChange,
   onScrollEnabledChange,
   onShowToolsChange,
   onShowTurningPointsChange,
   onTurningThresholdChange,
+  onShowMainProjectionChange,
+  onShowCrossProjectionChange,
   adjustType,
   onAdjustTypeChange,
 }: {
   symbol: WatchSymbol;
   periodValue: string;
   mainIndicator: string;
-  paneIndicator: string;
+  selectedPaneIndicators: string[];
   zoomEnabled: boolean;
   scrollEnabled: boolean;
   showTools: boolean;
   showTurningPoints: boolean;
   turningThreshold: number;
+  showMainProjection: boolean;
+  showCrossProjection: boolean;
   onPeriodChange: (value: string) => void;
   onMainIndicatorChange: (value: string) => void;
-  onPaneIndicatorChange: (value: string) => void;
+  onPaneIndicatorsChange: (value: string[]) => void;
   onZoomEnabledChange: (value: boolean) => void;
   onScrollEnabledChange: (value: boolean) => void;
   onShowToolsChange: (value: boolean) => void;
   onShowTurningPointsChange: (value: boolean) => void;
   onTurningThresholdChange: (value: number) => void;
+  onShowMainProjectionChange: (value: boolean) => void;
+  onShowCrossProjectionChange: (value: boolean) => void;
   adjustType: AdjustType;
   onAdjustTypeChange: (value: AdjustType) => void;
 }) {
@@ -739,6 +1162,20 @@ function TopToolbar({
           size="small"
           checked={showTurningPoints}
           onChange={onShowTurningPointsChange}
+        />
+      </SettingRow>
+      <SettingRow label="主线">
+        <Switch
+          size="small"
+          checked={showMainProjection}
+          onChange={onShowMainProjectionChange}
+        />
+      </SettingRow>
+      <SettingRow label="副线">
+        <Switch
+          size="small"
+          checked={showCrossProjection}
+          onChange={onShowCrossProjectionChange}
         />
       </SettingRow>
       <div className="min-w-[220px]">
@@ -808,11 +1245,14 @@ function TopToolbar({
       </Dropdown>
 
       <Select
+        mode="multiple"
         size="small"
-        value={paneIndicator}
-        className="w-[92px]"
+        value={selectedPaneIndicators}
+        className="min-w-[168px]"
+        maxTagCount="responsive"
+        placeholder="副图"
         options={paneIndicators.map((name) => ({ label: name, value: name }))}
-        onChange={onPaneIndicatorChange}
+        onChange={onPaneIndicatorsChange}
       />
 
       <Divider type="vertical" />
@@ -858,6 +1298,7 @@ function WatchlistCard({
   onSelect: (symbol: WatchSymbol) => void;
 }) {
   const [activeCategory, setActiveCategory] = useState("us");
+  const [keyword, setKeyword] = useState("");
   const visibleCategoryOptions = stockCategoryOptions
     .map((option) => ({
       ...option,
@@ -872,6 +1313,24 @@ function WatchlistCard({
   const visibleSymbols = symbols.filter(
     (item) => item.category === selectedCategory,
   );
+  const normalizedKeyword = keyword.trim().toLowerCase();
+  const searchedSymbols = normalizedKeyword
+    ? visibleSymbols.filter((item) =>
+        [
+          item.ticker,
+          item.name,
+          item.nameCn,
+          item.nameHk,
+          item.nameEn,
+          item.market,
+          item.exchange,
+        ]
+          .filter(Boolean)
+          .some((value) =>
+            String(value).toLowerCase().includes(normalizedKeyword),
+          ),
+      )
+    : visibleSymbols;
 
   if (collapsed) {
     return (
@@ -919,6 +1378,13 @@ function WatchlistCard({
             }))}
             onChange={(value) => setActiveCategory(String(value))}
           />
+          <Input.Search
+            allowClear
+            size="small"
+            placeholder="搜索代码 / 名称"
+            value={keyword}
+            onChange={(event) => setKeyword(event.target.value)}
+          />
           <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-auto">
           {loading && (
             <div className="px-2 py-1 text-xs text-slate-400">加载中...</div>
@@ -926,7 +1392,7 @@ function WatchlistCard({
           {error && !loading && (
             <div className="px-2 py-1 text-xs text-amber-600">{error}</div>
           )}
-          {visibleSymbols.map((item) => {
+          {searchedSymbols.map((item) => {
             const active = item.ticker === activeTicker;
             return (
               <button
@@ -1193,6 +1659,113 @@ function createWatchSymbolDedupe() {
   };
 }
 
+function renderBuySellSignalOverlays(
+  chart: Chart,
+  bars: KLineData[],
+  visible: boolean,
+) {
+  chart.removeOverlay({ groupId: BUY_SELL_SIGNAL_GROUP_ID });
+  if (!visible || bars.length < 16) return;
+
+  const overlays = calculateBuySellSignals(bars).map<OverlayCreate>((signal) => ({
+    name: "buySellSignal",
+    groupId: BUY_SELL_SIGNAL_GROUP_ID,
+    lock: true,
+    zLevel: 24,
+    points: [{ timestamp: signal.timestamp, value: signal.value }],
+    extendData: {
+      text: signal.text,
+      side: signal.side,
+    },
+  }));
+
+  if (overlays.length > 0) chart.createOverlay(overlays);
+}
+
+function calculateBuySellSignals(bars: KLineData[]) {
+  const result: Array<{
+    timestamp: number;
+    value: number;
+    text: string;
+    side: "buy" | "sell";
+  }> = [];
+  let previousBuy1 = false;
+  let previousBuy2 = false;
+  let previousSell1 = false;
+  let previousSell2 = false;
+
+  for (let index = 0; index < bars.length; index += 1) {
+    const buy1 = isContinuousCloseCompare(bars, index, 9, "lt");
+    const buy2 = isContinuousCloseCompare(bars, index, 12, "lt");
+    const sell1 = isContinuousCloseCompare(bars, index, 9, "gt");
+    const sell2 = isContinuousCloseCompare(bars, index, 12, "gt");
+    const bar = bars[index];
+    const high = Number(bar.high);
+    const low = Number(bar.low);
+    const close = Number(bar.close);
+    const padding = Math.max((high - low) * 0.35, close * 0.002);
+
+    if (buy1 && !previousBuy1) {
+      result.push({
+        timestamp: Number(bar.timestamp),
+        value: low - padding,
+        text: "买1",
+        side: "buy",
+      });
+    }
+    if (buy2 && !previousBuy2) {
+      result.push({
+        timestamp: Number(bar.timestamp),
+        value: low - padding * 1.9,
+        text: "买2",
+        side: "buy",
+      });
+    }
+    if (sell1 && !previousSell1) {
+      result.push({
+        timestamp: Number(bar.timestamp),
+        value: high + padding,
+        text: "卖1",
+        side: "sell",
+      });
+    }
+    if (sell2 && !previousSell2) {
+      result.push({
+        timestamp: Number(bar.timestamp),
+        value: high + padding * 1.9,
+        text: "卖2",
+        side: "sell",
+      });
+    }
+
+    previousBuy1 = buy1;
+    previousBuy2 = buy2;
+    previousSell1 = sell1;
+    previousSell2 = sell2;
+  }
+
+  return result;
+}
+
+function isContinuousCloseCompare(
+  bars: KLineData[],
+  index: number,
+  count: number,
+  direction: "lt" | "gt",
+) {
+  if (index - count - 3 < 0) return false;
+
+  for (let offset = 0; offset < count; offset += 1) {
+    const current = Number(bars[index - offset]?.close);
+    const reference = Number(bars[index - offset - 4]?.close);
+    if (!Number.isFinite(current) || !Number.isFinite(reference)) return false;
+    if (direction === "lt" && current >= reference) return false;
+    if (direction === "gt" && current <= reference) return false;
+  }
+
+  return true;
+}
+
 function renderTrendTurningPoints(
   chart: Chart,
   bars: KLineData[],
@@ -1237,7 +1810,7 @@ function renderTrendTurningPoints(
       ],
       styles: {
         line: {
-          color: current.kind === "high" ? "#089981" : "#f23645",
+          color: getTurningPointTheme(current.kind).lineColor,
           size: 1,
           style: "dashed",
           dashedValue: [5, 4],
@@ -1392,7 +1965,7 @@ function mergeMarketBars(
   );
 }
 
-function findHoveredTurningPoint(
+function findTurningPointByPixel(
   chart: Chart,
   points: TurningPoint[],
   x: number,
@@ -1424,6 +1997,89 @@ function findHoveredTurningPoint(
   return null;
 }
 
+function calculateGannProjectionFromPrice(
+  price: number,
+  trend: Trend,
+  source?: string,
+): Omit<GannProjectionPayload, "updatedAt"> {
+  const clickedValue = Math.max(1, Math.round(Number(price) || 1));
+  const loop = getProjectionLoopForValue(clickedValue);
+  const matrix = generateGannMatrix(1, 1, loop);
+  const position = findNumberPosition(matrix, clickedValue);
+  const r = position.r === -1 ? loop : position.r;
+  const c = position.c === -1 ? loop : position.c;
+  const result = getTrendExtensionPoints(matrix, r, c, trend, {
+    loop,
+  });
+
+  const lines = [
+    ...limitProjectionPoints(result.mainExtension, trend).map((point) => ({
+      value: point.value,
+      kind: "main" as const,
+    })),
+    ...limitProjectionPoints(result.crossExtension, trend).map((point) => ({
+      value: point.value,
+      kind: "cross" as const,
+    })),
+  ].filter((line) => line.value !== clickedValue);
+
+  return {
+    clickedValue,
+    trend,
+    source,
+    lines: dedupeProjectionLines(lines),
+  };
+}
+
+function getProjectionLoopForValue(value: number) {
+  const requiredLoop = Math.ceil((Math.sqrt(Math.max(1, value)) - 1) / 2);
+  return Math.max(GANN_PROJECTION_LOOP, requiredLoop + GANN_PROJECTION_POINT_LIMIT);
+}
+
+function limitProjectionPoints<T>(points: T[], trend: Trend) {
+  return trend === "up" ? points.slice(0, GANN_PROJECTION_POINT_LIMIT) : points;
+}
+
+function renderGannProjectionLines(
+  chart: Chart | null,
+  projection: Omit<GannProjectionPayload, "updatedAt"> | GannProjectionPayload,
+  visible: { main: boolean; cross: boolean } = { main: true, cross: false },
+) {
+  if (!chart) return;
+  chart.removeOverlay({ groupId: GANN_PROJECTION_GROUP_ID });
+
+  const overlays: OverlayCreate[] = dedupeProjectionLines(projection.lines)
+    .filter((line) => visible[line.kind])
+    .slice(0, 96)
+    .map((line) => ({
+      name: "gannProjectionLine",
+      groupId: GANN_PROJECTION_GROUP_ID,
+      lock: true,
+      zLevel: 16,
+      points: [{ timestamp: Date.now(), value: line.value }],
+      extendData: {
+        kind: line.kind,
+        label: formatPrice(line.value),
+      },
+    }));
+
+  if (overlays.length > 0) chart.createOverlay(overlays);
+}
+
+function dedupeProjectionLines(
+  lines: Array<{ value: number; kind: "main" | "cross" }>,
+) {
+  const seen = new Set<string>();
+  return lines.filter((line) => {
+    const value = Number(line.value);
+    if (!Number.isFinite(value) || value <= 0) return false;
+    const key = `${line.kind}:${value.toFixed(6)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 async function fetchMarketBars(
   ticker: string,
   period: Period,
@@ -1440,7 +2096,7 @@ async function fetchMarketBars(
   url.searchParams.set("refresh", "1");
   if (from !== undefined) url.searchParams.set("from", String(from));
   url.searchParams.set("to", String(to));
-  url.searchParams.set("adjust", adjustType);
+  url.searchParams.set("adjust", String(adjustType));
 
   const requestKey = url.toString();
   const cachedRequest = marketRequestCache.get(requestKey);

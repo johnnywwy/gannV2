@@ -39,6 +39,12 @@ import {
   type MatrixPoint,
   type Trend,
 } from "../utils/squareNine";
+import {
+  GANN_BRIDGE_EVENT,
+  readGannBridgeSelection,
+  saveGannProjectionResult,
+  type GannBridgePayload,
+} from "../utils/gannBridge";
 
 type GuideOption = "1x1" | "1x2" | "1x3" | "1x4" | "1x8" | "cross";
 
@@ -61,6 +67,7 @@ const CELL_SIZE_MAX = 100;
 const CELL_SIZE_STEP = 2;
 const AUTO_CELL_SIZE_FLOOR = 2;
 const AUTO_FIT_ROW_LIMIT = 25;
+const PROJECTION_POINT_LIMIT = 10;
 const SMALL_SCREEN_QUERY = "(max-width: 1023px)";
 const GUIDE_OPTIONS: Array<{ label: string; value: GuideOption }> = [
   { label: "角线", value: "1x1" },
@@ -210,6 +217,22 @@ function SquareNineChart() {
     setSelectedValue(Math.min(maxValue, Math.max(1, value)));
   }, [maxValue, searchValue]);
 
+  const applyBridgeSelection = useCallback(
+    (payload: GannBridgePayload | null) => {
+      if (!payload) return;
+      const rawValue = Math.max(1, Math.round(payload.value));
+      const requiredLoop = getLoopForValue(rawValue);
+      const nextLoop = normalizeLoop(Math.max(rowColumn, requiredLoop));
+      const nextMaxValue = (nextLoop * 2 + 1) ** 2;
+      const value = Math.min(nextMaxValue, rawValue);
+      if (nextLoop !== rowColumn) setRowColumn(nextLoop);
+      setTrend(payload.trend);
+      setSelectedValue(value);
+      setSearchValue(value);
+    },
+    [rowColumn],
+  );
+
   const pickCell = useCallback(
     (clientX: number, clientY: number) => {
       const canvas = canvasRef.current;
@@ -348,6 +371,18 @@ function SquareNineChart() {
   }, [maxValue, selectedValue]);
 
   useEffect(() => {
+    applyBridgeSelection(readGannBridgeSelection());
+
+    const handleBridgeSelection = (event: Event) => {
+      applyBridgeSelection((event as CustomEvent<GannBridgePayload>).detail);
+    };
+
+    window.addEventListener(GANN_BRIDGE_EVENT, handleBridgeSelection);
+    return () =>
+      window.removeEventListener(GANN_BRIDGE_EVENT, handleBridgeSelection);
+  }, [applyBridgeSelection]);
+
+  useEffect(() => {
     if (!canAutoFit && autoFit) setAutoFit(false);
   }, [autoFit, canAutoFit]);
 
@@ -430,6 +465,24 @@ function SquareNineChart() {
       副线延伸点: validationPoints.crossExtension.map((point) => point.value),
     });
   }, [loop, selectedValue, trend, trendResult, validationPoints]);
+
+  useEffect(() => {
+    saveGannProjectionResult({
+      clickedValue: selectedValue,
+      trend,
+      source: "九方图",
+      lines: [
+        ...validationPoints.mainExtension.map((point) => ({
+          value: point.value,
+          kind: "main" as const,
+        })).slice(0, trend === "up" ? PROJECTION_POINT_LIMIT : undefined),
+        ...validationPoints.crossExtension.map((point) => ({
+          value: point.value,
+          kind: "cross" as const,
+        })).slice(0, trend === "up" ? PROJECTION_POINT_LIMIT : undefined),
+      ],
+    });
+  }, [selectedValue, trend, validationPoints]);
 
   return (
     <ConfigProvider>
@@ -1021,6 +1074,10 @@ function compactValue(value: number, cellSize: number) {
 
 function normalizeLoop(value: number) {
   return Math.max(1, Math.min(99, Math.trunc(Number(value) || 9)));
+}
+
+function getLoopForValue(value: number) {
+  return Math.ceil((Math.sqrt(Math.max(1, value)) - 1) / 2);
 }
 
 function clampCellSize(value: number) {

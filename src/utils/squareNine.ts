@@ -126,8 +126,14 @@ export function getTrendExtensionPoints(
   const result = calculateClickTrend(matrix, r, c, trendDirection, options)
   const loop = Math.max(1, Number(options.loop ?? Math.floor(matrix.length / 2)) || 1)
   const clicked = { row: r - loop, col: c - loop }
-  const mainExtension = buildMainExtension(matrix, result.mainLine, clicked, loop, trendDirection)
-  const crossExtension = buildCrossExtension(matrix, result.crossLine, loop, trendDirection)
+  const mainExtension =
+    trendDirection === 'down'
+      ? buildDownValidationPoints(result.mainLine, result.clickedValue)
+      : buildMainExtension(matrix, result.mainLine, clicked, loop, trendDirection)
+  const crossExtension =
+    trendDirection === 'down'
+      ? buildDownValidationPoints(result.crossLine, result.clickedValue)
+      : buildCrossExtension(matrix, result.crossLine, loop, trendDirection)
 
   return {
     clickedValue: result.clickedValue,
@@ -135,6 +141,12 @@ export function getTrendExtensionPoints(
     mainExtension,
     crossExtension,
   }
+}
+
+function buildDownValidationPoints(line: MatrixPoint[], clickedValue: number) {
+  return dedupePointsByValue(line)
+    .filter((point) => Number(point.value) < Number(clickedValue))
+    .sort((a, b) => Number(b.value) - Number(a.value))
 }
 
 function valuesToPoints(matrix: number[][], values: number[]) {
@@ -261,6 +273,16 @@ function dedupePoints(points: MatrixPoint[]) {
     const key = `${point.r}:${point.c}`
     if (seen.has(key)) return false
     seen.add(key)
+    return true
+  })
+}
+
+function dedupePointsByValue(points: MatrixPoint[]) {
+  const seen = new Set<number>()
+  return points.filter((point) => {
+    const value = Number(point.value)
+    if (seen.has(value)) return false
+    seen.add(value)
     return true
   })
 }
