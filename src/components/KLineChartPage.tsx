@@ -157,6 +157,7 @@ const BUY_SELL_SIGNAL_INDICATOR = "BUYSELL";
 const GANN_PROJECTION_LOOP = 9;
 const GANN_PROJECTION_POINT_LIMIT = 10;
 const DEFAULT_TURNING_THRESHOLD = 1.8;
+const visibleStockCategoryValues = new Set(["us", "cn", "hk"]);
 const stockCategoryOptions = [
   { label: "美股", value: "us" },
   { label: "A股", value: "cn" },
@@ -261,8 +262,32 @@ const trendTurnMarkerOverlay: OverlayTemplate<TurningPointMarkerData> = {
     const width = Math.max(48, data.label.length * 11 + 16);
     const height = 22;
     const y = coordinate.y + (isHigh ? -34 : 12);
+    const triangleWidth = 12;
+    const triangleHeight = 8;
+    const triangleY = isHigh ? coordinate.y - 13 : coordinate.y + 13;
 
     return [
+      {
+        type: "polygon",
+        attrs: {
+          coordinates: isHigh
+            ? [
+                { x: coordinate.x - triangleWidth / 2, y: triangleY },
+                { x: coordinate.x + triangleWidth / 2, y: triangleY },
+                { x: coordinate.x, y: triangleY + triangleHeight },
+              ]
+            : [
+                { x: coordinate.x, y: triangleY - triangleHeight },
+                { x: coordinate.x - triangleWidth / 2, y: triangleY },
+                { x: coordinate.x + triangleWidth / 2, y: triangleY },
+              ],
+        },
+        styles: {
+          style: "fill",
+          color: theme.borderColor,
+        },
+        ignoreEvent: true,
+      },
       {
         type: "rect",
         attrs: {
@@ -611,14 +636,14 @@ function KLineChartPage() {
         },
         candle: {
           bar: {
-            upColor: "#089981",
-            downColor: "#f23645",
+            upColor: "#f23645",
+            downColor: "#089981",
             noChangeColor: "#6b7280",
-            upBorderColor: "#089981",
-            downBorderColor: "#f23645",
+            upBorderColor: "#f23645",
+            downBorderColor: "#089981",
             noChangeBorderColor: "#6b7280",
-            upWickColor: "#089981",
-            downWickColor: "#f23645",
+            upWickColor: "#f23645",
+            downWickColor: "#089981",
             noChangeWickColor: "#6b7280",
           },
           priceMark: {
@@ -911,7 +936,7 @@ function KLineChartPage() {
     setDrawingTool(null);
   };
 
-  const handleChartClick = (event: React.MouseEvent<HTMLDivElement>) => {
+  const updateSelectedTurningPointByClientPoint = (clientX: number, clientY: number) => {
     const chart = chartRef.current;
     const host = chartHostRef.current;
     if (!chart || !host || turningPointsRef.current.length === 0) {
@@ -930,6 +955,16 @@ function KLineChartPage() {
     }
 
     setSelectedTurningPoint(null);
+  };
+
+  const handleChartClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    updateSelectedTurningPointByClientPoint(event.clientX, event.clientY);
+  };
+
+  const handleChartTouch = (event: React.TouchEvent<HTMLDivElement>) => {
+    const touch = event.touches[0] ?? event.changedTouches[0];
+    if (!touch) return;
+    updateSelectedTurningPointByClientPoint(touch.clientX, touch.clientY);
   };
 
   const handleTrendSelect = (trend: Trend) => {
@@ -1007,6 +1042,8 @@ function KLineChartPage() {
             <div
               className="relative min-w-0 flex-1 bg-white"
               onClick={handleChartClick}
+              onTouchStart={handleChartTouch}
+              onTouchMove={handleChartTouch}
             >
               <div ref={chartHostRef} className="h-full w-full" />
               {selectedTurningPoint && (
@@ -1503,6 +1540,7 @@ async function fetchWatchSymbols() {
   return rawStocks
     .map(normalizeWatchSymbol)
     .filter((item: WatchSymbol | null): item is WatchSymbol => item !== null)
+    .filter((item) => visibleStockCategoryValues.has(item.category ?? ""))
     .filter(createWatchSymbolDedupe());
 }
 
@@ -1588,10 +1626,12 @@ function extractCategoryRows(source: Record<string, unknown>) {
   if (!categories) return [];
 
   return stockCategoryOptions.flatMap((option) =>
-    asRecordArray(categories[option.value]).map((row) => ({
-      ...row,
-      __category: option.value,
-    })),
+    visibleStockCategoryValues.has(option.value)
+      ? asRecordArray(categories[option.value]).map((row) => ({
+          ...row,
+          __category: option.value,
+        }))
+      : [],
   );
 }
 

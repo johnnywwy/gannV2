@@ -170,15 +170,21 @@ function buildMainExtension(matrix: number[][], mainLine: MatrixPoint[], clicked
 
   const first = toRelPoint(mainLine[0], loop)
   const last = toRelPoint(mainLine[mainLine.length - 1], loop)
-  const clickedRing = Math.max(Math.abs(clicked.row), Math.abs(clicked.col))
 
   if (last.row === clicked.row) {
     const edgePoint = trend === 'up' ? last : first
     const fallback = trend === 'up' ? -Math.sign(clicked.col || 1) : Math.sign(clicked.col || 1)
     const firstSide = edgePoint.col === 0 ? fallback : Math.sign(edgePoint.col)
-    for (let ring = clickedRing + 1; ring <= loop; ring += 1) {
-      pushRel(points, matrix, { row: clicked.row, col: firstSide * ring }, loop)
-      pushRel(points, matrix, { row: clicked.row, col: -firstSide * ring }, loop)
+    const edgeRing = Math.max(Math.abs(edgePoint.row), Math.abs(edgePoint.col))
+    pushAxisPair(points, matrix, [
+      { row: clicked.row, col: firstSide * edgeRing },
+      { row: clicked.row, col: -firstSide * edgeRing },
+    ], loop)
+    for (let ring = edgeRing + 1; ring <= loop; ring += 1) {
+      pushAxisPair(points, matrix, [
+        { row: clicked.row, col: firstSide * ring },
+        { row: clicked.row, col: -firstSide * ring },
+      ], loop)
     }
     return dedupePoints(points)
   }
@@ -187,9 +193,16 @@ function buildMainExtension(matrix: number[][], mainLine: MatrixPoint[], clicked
     const edgePoint = trend === 'up' ? last : first
     const fallback = trend === 'up' ? -Math.sign(clicked.row || 1) : Math.sign(clicked.row || 1)
     const firstSide = edgePoint.row === 0 ? fallback : Math.sign(edgePoint.row)
-    for (let ring = clickedRing + 1; ring <= loop; ring += 1) {
-      pushRel(points, matrix, { row: firstSide * ring, col: clicked.col }, loop)
-      pushRel(points, matrix, { row: -firstSide * ring, col: clicked.col }, loop)
+    const edgeRing = Math.max(Math.abs(edgePoint.row), Math.abs(edgePoint.col))
+    pushAxisPair(points, matrix, [
+      { row: firstSide * edgeRing, col: clicked.col },
+      { row: -firstSide * edgeRing, col: clicked.col },
+    ], loop)
+    for (let ring = edgeRing + 1; ring <= loop; ring += 1) {
+      pushAxisPair(points, matrix, [
+        { row: firstSide * ring, col: clicked.col },
+        { row: -firstSide * ring, col: clicked.col },
+      ], loop)
     }
     return dedupePoints(points)
   }
@@ -265,6 +278,14 @@ function matrixPointAtRel(matrix: number[][], point: SpiralPoint, loop: number) 
 function pushRel(points: MatrixPoint[], matrix: number[][], point: SpiralPoint, loop: number) {
   const matrixPoint = matrixPointAtRel(matrix, point, loop)
   if (matrixPoint) points.push(matrixPoint)
+}
+
+function pushAxisPair(points: MatrixPoint[], matrix: number[][], pair: SpiralPoint[], loop: number) {
+  pair
+    .map((point) => matrixPointAtRel(matrix, point, loop))
+    .filter((point): point is MatrixPoint => Boolean(point))
+    .sort((a, b) => Number(a.value) - Number(b.value))
+    .forEach((point) => points.push(point))
 }
 
 function dedupePoints(points: MatrixPoint[]) {
