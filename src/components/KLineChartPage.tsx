@@ -945,8 +945,8 @@ function KLineChartPage() {
     }
 
     const rect = host.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
     const match = findTurningPointByPixel(chart, turningPointsRef.current, x, y);
 
     if (match) {
@@ -969,13 +969,19 @@ function KLineChartPage() {
 
   const handleTrendSelect = (trend: Trend) => {
     if (!selectedTurningPoint) return;
+    const turningDate = formatDateFromTimestamp(selectedTurningPoint.timestamp);
     const source = `${activeSymbol.ticker} ${
       selectedTurningPoint.kind === "high" ? "高点" : "低点"
-    }`;
+    }${turningDate ? ` ${turningDate}` : ""}`;
     saveGannBridgeSelection({
       value: selectedTurningPoint.roundedValue,
       trend,
       source,
+      symbol: activeSymbol.ticker,
+      symbolName: activeSymbol.name,
+      turningKind: selectedTurningPoint.kind,
+      timestamp: selectedTurningPoint.timestamp,
+      date: turningDate,
     });
     const projection = calculateGannProjectionFromPrice(
       selectedTurningPoint.roundedValue,
@@ -1103,6 +1109,9 @@ function TurningPointActionPopup({
         <Button size="small" type="text" onClick={onClose}>
           ×
         </Button>
+      </div>
+      <div className="mb-2 text-xs text-slate-500">
+        {formatDateFromTimestamp(point.timestamp)}
       </div>
       <Space size={6}>
         <Button
@@ -1984,6 +1993,15 @@ function formatPrice(value: number) {
   if (Math.abs(value) >= 1000) return value.toFixed(0);
   if (Math.abs(value) >= 10) return value.toFixed(2);
   return value.toFixed(4);
+}
+
+function formatDateFromTimestamp(timestamp: number) {
+  const date = new Date(Number(timestamp));
+  if (Number.isNaN(date.getTime())) return "";
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function mergeMarketBars(

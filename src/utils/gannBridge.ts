@@ -4,6 +4,11 @@ export type GannBridgePayload = {
   value: number;
   trend: Trend;
   source?: string;
+  symbol?: string;
+  symbolName?: string;
+  turningKind?: "high" | "low";
+  timestamp?: number;
+  date?: string;
   updatedAt: number;
 };
 
@@ -49,7 +54,7 @@ export function saveGannProjectionResult(
     ...payload,
     clickedValue: Math.max(1, Math.round(Number(payload.clickedValue) || 1)),
     lines: payload.lines
-      .map((line) => ({
+      .map<GannProjectionLine>((line) => ({
         value: Number(line.value),
         kind: line.kind === "cross" ? "cross" : "main",
       }))
