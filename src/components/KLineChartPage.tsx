@@ -61,6 +61,15 @@ import {
   getTrendExtensionPoints,
   type Trend,
 } from "../utils/squareNine";
+import {
+  calculateMajorTurningPoints,
+  readStoredTurningThreshold,
+  formatDateFromTimestamp,
+  normalizeTurningThreshold,
+  saveTurningThreshold,
+  type TurningPoint,
+  type TurningPointKind,
+} from "../utils/turningPoints";
 
 type PeriodOption = {
   label: string;
@@ -72,16 +81,6 @@ type DrawingTool = {
   label: string;
   icon: React.ReactNode;
   overlay: string;
-};
-
-type TurningPointKind = "high" | "low";
-
-type TurningPoint = {
-  kind: TurningPointKind;
-  timestamp: number;
-  value: number;
-  index: number;
-  key: string;
 };
 
 type TurningPointMarkerData = {
@@ -142,10 +141,14 @@ const defaultSymbol = {
 const API_BASE = "https://n1-longbridge.johnnywwy.com/api";
 const STOCKS_API_URL = `${API_BASE}/stocks`;
 const MARKET_API_BASE = `${API_BASE}/kline`;
-const KLINE_COUNT = 1000;
-const REQUEST_RANGE_MULTIPLIER = 3;
+const MIN_KLINE_REQUEST_COUNT = 1000;
+const MAX_KLINE_REQUEST_COUNT = 12_000;
+const DAILY_REQUEST_WINDOW_DAYS = 1000;
+const HOUR_REQUEST_WINDOW_DAYS = 120;
+const MINUTE_REQUEST_WINDOW_DAYS = 7;
 const HISTORY_LOAD_DEBOUNCE_MS = 280;
 const REQUEST_NOW_BUCKET_MS = 30_000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 const MARKET_REQUEST_CACHE_MS = 20_000;
 const MAX_SCROLL_DISTANCE = 10_000_000;
 const KLINE_RIGHT_OFFSET = 96;
@@ -156,7 +159,6 @@ const BUY_SELL_SIGNAL_GROUP_ID = "buy-sell-signals";
 const BUY_SELL_SIGNAL_INDICATOR = "BUYSELL";
 const GANN_PROJECTION_LOOP = 9;
 const GANN_PROJECTION_POINT_LIMIT = 10;
-const DEFAULT_TURNING_THRESHOLD = 1.8;
 const visibleStockCategoryValues = new Set(["us", "cn", "hk"]);
 const stockCategoryOptions = [
   { label: "美股", value: "us" },
@@ -525,7 +527,8 @@ function KLineChartPage() {
   const marketBarsRef = useRef<KLineData[]>([]);
   const turningPointsRef = useRef<TurningPoint[]>([]);
   const showTurningPointsRef = useRef(true);
-  const turningThresholdRef = useRef(DEFAULT_TURNING_THRESHOLD);
+  const initialTurningThreshold = useMemo(readStoredTurningThreshold, []);
+  const turningThresholdRef = useRef(initialTurningThreshold);
   const projectionRef = useRef<GannProjectionPayload | null>(null);
   const projectionLineVisibleRef = useRef({ main: true, cross: false });
   const paneIndicatorsRef = useRef<string[]>(["RSI"]);
@@ -546,7 +549,9 @@ function KLineChartPage() {
   const [showTools, setShowTools] = useState(true);
   const [watchlistCollapsed, setWatchlistCollapsed] = useState(false);
   const [showTurningPoints, setShowTurningPoints] = useState(true);
-  const [turningThreshold, setTurningThreshold] = useState(DEFAULT_TURNING_THRESHOLD);
+  const [turningThreshold, setTurningThreshold] = useState(
+    initialTurningThreshold,
+  );
   const [showMainProjection, setShowMainProjection] = useState(true);
   const [showCrossProjection, setShowCrossProjection] = useState(true);
   const [selectedTurningPoint, setSelectedTurningPoint] =
@@ -909,6 +914,7 @@ function KLineChartPage() {
   }, [showMainProjection, showCrossProjection]);
 
   useEffect(() => {
+    saveTurningThreshold(turningThreshold);
     showTurningPointsRef.current = showTurningPoints;
     turningThresholdRef.current = turningThreshold;
     const chart = chartRef.current;
@@ -1234,7 +1240,9 @@ function TopToolbar({
             step={0.1}
             value={turningThreshold}
             onChange={(value) => {
-              if (typeof value === "number") onTurningThresholdChange(value);
+              if (typeof value === "number") {
+                onTurningThresholdChange(normalizeTurningThreshold(value));
+              }
             }}
           />
         </div>
@@ -1243,7 +1251,9 @@ function TopToolbar({
           max={8}
           step={0.1}
           value={turningThreshold}
-          onChange={onTurningThresholdChange}
+          onChange={(value) =>
+            onTurningThresholdChange(normalizeTurningThreshold(value))
+          }
         />
       </div>
     </Space>
@@ -1872,136 +1882,10 @@ function renderTrendTurningPoints(
   return points;
 }
 
-function calculateMajorTurningPoints(
-  bars: KLineData[],
-  threshold: number,
-): TurningPoint[] {
-  if (bars.length < 30) return [];
-
-  const highs = bars.map((bar) => Number(bar.high));
-  const lows = bars.map((bar) => Number(bar.low));
-  const validHighs = highs.filter(Number.isFinite);
-  const validLows = lows.filter(Number.isFinite);
-  if (validHighs.length === 0 || validLows.length === 0) return [];
-
-  const highest = Math.max(...validHighs);
-  const lowest = Math.min(...validLows);
-  const range = highest - lowest;
-  if (!Number.isFinite(range) || range <= 0) return [];
-
-  const pivotWindow = clamp(Math.floor(bars.length / 90), 5, 18);
-  const normalizedThreshold = clamp(threshold, 0.5, 8);
-  const minMove = Math.max(
-    range * (normalizedThreshold / 100),
-    calculateAverageTrueRange(bars, 14) * normalizedThreshold,
-  );
-  const candidates: TurningPoint[] = [];
-
-  for (let index = pivotWindow; index < bars.length - pivotWindow; index += 1) {
-    const high = highs[index];
-    const low = lows[index];
-    if (!Number.isFinite(high) || !Number.isFinite(low)) continue;
-
-    let isHigh = true;
-    let isLow = true;
-    for (let offset = index - pivotWindow; offset <= index + pivotWindow; offset += 1) {
-      if (offset === index) continue;
-      if (high < highs[offset]) isHigh = false;
-      if (low > lows[offset]) isLow = false;
-      if (!isHigh && !isLow) break;
-    }
-
-    if (isHigh) {
-      candidates.push({
-        kind: "high",
-        timestamp: Number(bars[index].timestamp),
-        value: high,
-        index,
-        key: `high:${bars[index].timestamp}:${high}`,
-      });
-    }
-    if (isLow) {
-      candidates.push({
-        kind: "low",
-        timestamp: Number(bars[index].timestamp),
-        value: low,
-        index,
-        key: `low:${bars[index].timestamp}:${low}`,
-      });
-    }
-  }
-
-  return compressTurningPoints(candidates, minMove, pivotWindow).slice(-36);
-}
-
-function compressTurningPoints(
-  candidates: TurningPoint[],
-  minMove: number,
-  pivotWindow: number,
-) {
-  const points: TurningPoint[] = [];
-  candidates
-    .sort((a, b) => a.index - b.index || (a.kind === "high" ? -1 : 1))
-    .forEach((candidate) => {
-      const last = points.at(-1);
-      if (!last) {
-        points.push(candidate);
-        return;
-      }
-
-      if (candidate.kind === last.kind) {
-        const shouldReplace =
-          candidate.kind === "high"
-            ? candidate.value >= last.value
-            : candidate.value <= last.value;
-        if (shouldReplace) points[points.length - 1] = candidate;
-        return;
-      }
-
-      const hasEnoughMove = Math.abs(candidate.value - last.value) >= minMove;
-      const hasEnoughDistance = candidate.index - last.index >= pivotWindow * 2;
-      if (hasEnoughMove || hasEnoughDistance) {
-        points.push(candidate);
-      }
-    });
-
-  return points;
-}
-
-function calculateAverageTrueRange(bars: KLineData[], period: number) {
-  const trueRanges: number[] = [];
-  for (let index = 1; index < bars.length; index += 1) {
-    const high = Number(bars[index].high);
-    const low = Number(bars[index].low);
-    const prevClose = Number(bars[index - 1].close);
-    if (![high, low, prevClose].every(Number.isFinite)) continue;
-    trueRanges.push(
-      Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose)),
-    );
-  }
-
-  const recent = trueRanges.slice(-period * 3);
-  if (recent.length === 0) return 0;
-  return recent.reduce((sum, value) => sum + value, 0) / recent.length;
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
-
 function formatPrice(value: number) {
   if (Math.abs(value) >= 1000) return value.toFixed(0);
   if (Math.abs(value) >= 10) return value.toFixed(2);
   return value.toFixed(4);
-}
-
-function formatDateFromTimestamp(timestamp: number) {
-  const date = new Date(Number(timestamp));
-  if (Number.isNaN(date.getTime())) return "";
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
 }
 
 function mergeMarketBars(
@@ -2146,11 +2030,15 @@ async function fetchMarketBars(
   adjustType: AdjustType,
 ): Promise<{ bars: KLineData[]; more: DataLoadMore }> {
   const apiPeriod = periodToApiPeriod(period);
-  const { from, to } = getMarketRequestRange(period, loadType, anchorTimestamp);
+  const { from, to, count } = getMarketRequestRange(
+    period,
+    loadType,
+    anchorTimestamp,
+  );
   const url = new URL(
     `${MARKET_API_BASE}/${apiPeriod}/${encodeURIComponent(ticker)}`,
   );
-  url.searchParams.set("count", String(KLINE_COUNT));
+  url.searchParams.set("count", String(count));
   url.searchParams.set("refresh", "1");
   if (from !== undefined) url.searchParams.set("from", String(from));
   url.searchParams.set("to", String(to));
@@ -2220,30 +2108,42 @@ function getMarketRequestRange(
 ) {
   const now = getRequestNow();
   const step = periodToMilliseconds(period);
-  const span = step * KLINE_COUNT * REQUEST_RANGE_MULTIPLIER;
-  const initSpan = getInitialRequestSpan(period, step);
+  const span = getRequestTimeSpan(period, step);
 
   if (loadType === "forward" && anchorTimestamp) {
     const to = anchorTimestamp - 1;
-    return { from: Math.max(0, to - span), to };
+    const from = Math.max(0, to - span);
+    return { from, to, count: getRequestCount(period, from, to) };
   }
 
   if ((loadType === "backward" || loadType === "update") && anchorTimestamp) {
     const from = anchorTimestamp + 1;
-    return { from, to: Math.max(from, Math.min(now, from + span)) };
+    const to = Math.max(from, Math.min(now, from + span));
+    return { from, to, count: getRequestCount(period, from, to) };
   }
 
-  return { from: Math.max(0, now - initSpan), to: now };
+  const from = Math.max(0, now - span);
+  return { from, to: now, count: getRequestCount(period, from, now) };
 }
 
 function getRequestNow() {
   return Math.floor(Date.now() / REQUEST_NOW_BUCKET_MS) * REQUEST_NOW_BUCKET_MS;
 }
 
-function getInitialRequestSpan(period: Period, step: number) {
-  if (period.type === "minute") return Math.max(step * KLINE_COUNT, 7 * 24 * 60 * 60 * 1000);
-  if (period.type === "hour") return Math.max(step * KLINE_COUNT, 120 * 24 * 60 * 60 * 1000);
-  return step * KLINE_COUNT;
+function getRequestTimeSpan(period: Period, step: number) {
+  if (period.type === "minute") return MINUTE_REQUEST_WINDOW_DAYS * DAY_MS;
+  if (period.type === "hour") return HOUR_REQUEST_WINDOW_DAYS * DAY_MS;
+  if (period.type === "day") return DAILY_REQUEST_WINDOW_DAYS * DAY_MS;
+  return step * MIN_KLINE_REQUEST_COUNT;
+}
+
+function getRequestCount(period: Period, from: number, to: number) {
+  const step = periodToMilliseconds(period);
+  const estimatedBars = Math.ceil(Math.max(0, to - from) / step) + 1;
+  return Math.min(
+    MAX_KLINE_REQUEST_COUNT,
+    Math.max(MIN_KLINE_REQUEST_COUNT, estimatedBars),
+  );
 }
 
 function getMarketLoadMore(

@@ -46,6 +46,14 @@ import {
   saveGannProjectionResult,
   type GannBridgePayload,
 } from "../utils/gannBridge";
+import {
+  calculateMajorTurningPoints,
+  formatDateFromTimestamp,
+  normalizeTurningThreshold,
+  readStoredTurningThreshold,
+  saveTurningThreshold,
+  type TurningPoint,
+} from "../utils/turningPoints";
 
 type GuideOption = "1x1" | "1x2" | "1x3" | "1x4" | "1x8" | "cross";
 type MatrixMode = "space" | "time";
@@ -67,6 +75,7 @@ type StoredSquareNineState = {
     date?: string;
   } | null;
   selectedTimeSymbolTicker?: string;
+  diagonalMinHitCount?: number;
 };
 
 type Cell = MatrixPoint & {
@@ -93,21 +102,34 @@ type MarketBar = {
   close: number;
 };
 
-type TimeTurningPoint = {
-  kind: "high" | "low";
-  timestamp: number;
+type TradingCalendar = {
+  keys: Set<string>;
+  firstKey?: string;
+  lastKey?: string;
+};
+
+type TimeTurningPoint = TurningPoint & {
   date: string;
-  value: number;
-  index: number;
-  key: string;
   cellKey?: string;
 };
 
-type DiagonalHitCandidate = Cell & {
+type DiagonalHitLinePoint = TimeTurningPoint & {
+  cell: Cell;
+  adjustedCell: Cell;
+  adjustedDate: string;
+  nonTradingAdjusted: boolean;
+};
+
+type DiagonalHitLine = {
+  key: string;
+  slope: 1 | -1;
+  intercept: number;
+  value: number;
   date: string;
   hitCount: number;
   highCount: number;
   lowCount: number;
+  points: DiagonalHitLinePoint[];
 };
 
 type CanvasMetrics = {
@@ -131,10 +153,16 @@ const DEFAULT_START_DATE = "2024-01-01";
 const API_BASE = "https://n1-longbridge.johnnywwy.com/api";
 const STOCKS_API_URL = `${API_BASE}/stocks`;
 const MARKET_API_BASE = `${API_BASE}/kline`;
-const KLINE_COUNT = 1000;
+const TIME_MATRIX_LOOKBACK_DAYS = 1000;
 const REQUEST_NOW_BUCKET_MS = 30_000;
-const DEFAULT_TURNING_THRESHOLD = 1.8;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MAX_DIAGONAL_HIT_LINES = 8;
+const DEFAULT_DIAGONAL_HIT_TOLERANCE = 3;
+const DEFAULT_DIAGONAL_MIN_HIT_COUNT = 3;
+const MIN_DIAGONAL_MIN_HIT_COUNT = 2;
+const MAX_DIAGONAL_MIN_HIT_COUNT = 10;
 const EMPTY_KEY_SET = new Set<string>();
+const EMPTY_TRADING_CALENDAR: TradingCalendar = { keys: new Set<string>() };
 const SQUARE_NINE_STATE_KEY = "gann-square-nine-state";
 const GUIDE_OPTIONS: Array<{ label: string; value: GuideOption }> = [
   { label: "角线", value: "1x1" },
@@ -179,6 +207,12 @@ function SquareNineChart() {
   const [dimUsClosedDays, setDimUsClosedDays] = useState(
     storedState.dimUsClosedDays ?? true,
   );
+  const [turningThreshold, setTurningThreshold] = useState(
+    readStoredTurningThreshold,
+  );
+  const [diagonalMinHitCount, setDiagonalMinHitCount] = useState(() =>
+    normalizeDiagonalMinHitCount(storedState.diagonalMinHitCount),
+  );
   const [hoverKey, setHoverKey] = useState<string | null>(null);
   const [guideOptions, setGuideOptions] = useState<GuideOption[]>([
     "1x1",
@@ -187,6 +221,7 @@ function SquareNineChart() {
   ]);
   const [extraGuidesOpen, setExtraGuidesOpen] = useState(false);
   const [controlsOpen, setControlsOpen] = useState(true);
+  const [mappingInfoOpen, setMappingInfoOpen] = useState(true);
   const [validationOpen, setValidationOpen] = useState(true);
   const [bridgeTurningKind, setBridgeTurningKind] = useState<
     "high" | "low" | null
@@ -209,6 +244,9 @@ function SquareNineChart() {
   const [timeTurningPoints, setTimeTurningPoints] = useState<
     TimeTurningPoint[]
   >([]);
+  const [timeTradingCalendar, setTimeTradingCalendar] = useState<TradingCalendar>(
+    EMPTY_TRADING_CALENDAR,
+  );
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const chartWrapRef = useRef<HTMLDivElement | null>(null);
   const hoverKeyRef = useRef<string | null>(null);
@@ -343,10 +381,22 @@ function SquareNineChart() {
     });
     return markers;
   }, [timeTurningPoints]);
-  const bestDiagonalCandidates = useMemo(
+  const bestDiagonalLines = useMemo(
     () =>
-      calculateBestDiagonalHitCandidates(cells, timeTurningPoints, startDate),
-    [cells, startDate, timeTurningPoints],
+      calculateBestDiagonalHitLines(
+        cells,
+        timeTurningPoints,
+        startDate,
+        diagonalMinHitCount,
+        timeTradingCalendar,
+      ),
+    [
+      cells,
+      diagonalMinHitCount,
+      startDate,
+      timeTradingCalendar,
+      timeTurningPoints,
+    ],
   );
 
   const locateValue = useCallback(() => {
@@ -574,10 +624,12 @@ function SquareNineChart() {
       bridgeTurningKind,
       bridgeInfo,
       selectedTimeSymbolTicker,
+      diagonalMinHitCount,
     });
   }, [
     bridgeInfo,
     bridgeTurningKind,
+    diagonalMinHitCount,
     dimUsClosedDays,
     matrixMode,
     rowColumn,
@@ -588,6 +640,10 @@ function SquareNineChart() {
     startDate,
     trend,
   ]);
+
+  useEffect(() => {
+    saveTurningThreshold(turningThreshold);
+  }, [turningThreshold]);
 
   useEffect(() => {
     if (matrixMode !== "time" || watchSymbols.length > 0) {
@@ -621,7 +677,11 @@ function SquareNineChart() {
   }, [matrixMode, selectedTimeSymbolTicker, watchSymbols.length]);
 
   useEffect(() => {
-    if (matrixMode !== "time" || !selectedTimeSymbol) return;
+    if (matrixMode !== "time" || !selectedTimeSymbol) {
+      setTimeTurningPoints([]);
+      setTimeTradingCalendar(EMPTY_TRADING_CALENDAR);
+      return;
+    }
     let cancelled = false;
 
     const loadTurningPoints = async () => {
@@ -629,12 +689,19 @@ function SquareNineChart() {
       setTurningMapError(null);
       try {
         const bars = await fetchDailyMarketBars(selectedTimeSymbol.ticker);
+        const tradingCalendar = createTradingCalendar(bars);
         const points = mapTurningPointsToTimeCells(
-          calculateTimeTurningPoints(bars, DEFAULT_TURNING_THRESHOLD),
+          calculateMajorTurningPoints(bars, turningThreshold).map(
+            (point) => ({
+              ...point,
+              date: formatDateFromTimestamp(point.timestamp),
+            }),
+          ),
           startDate,
           matrix,
         );
         if (cancelled) return;
+        setTimeTradingCalendar(tradingCalendar);
         setTimeTurningPoints(points);
         setBridgeInfo({
           symbol: selectedTimeSymbol.ticker,
@@ -646,6 +713,7 @@ function SquareNineChart() {
         console.warn("Square nine turning map failed", error);
         if (!cancelled) {
           setTimeTurningPoints([]);
+          setTimeTradingCalendar(EMPTY_TRADING_CALENDAR);
           setTurningMapError("K 线或转折点加载失败");
         }
       } finally {
@@ -658,7 +726,7 @@ function SquareNineChart() {
     return () => {
       cancelled = true;
     };
-  }, [matrix, matrixMode, selectedTimeSymbol, startDate]);
+  }, [matrix, matrixMode, selectedTimeSymbol, startDate, turningThreshold]);
 
   useEffect(() => {
     if (matrixMode === "time") setValidationOpen(true);
@@ -668,8 +736,14 @@ function SquareNineChart() {
     if (matrixMode !== "time") return;
     const baseDate = parseDateInput(startDate);
     if (!baseDate) return;
-    setSearchDate(formatDateByOffset(baseDate, selectedValue - 1));
-  }, [matrixMode, selectedValue, startDate]);
+    setSearchDate(
+      formatProjectedDateByOffset(
+        baseDate,
+        selectedValue - 1,
+        timeTradingCalendar,
+      ),
+    );
+  }, [matrixMode, selectedValue, startDate, timeTradingCalendar]);
 
   useEffect(() => {
     const query = window.matchMedia(SMALL_SCREEN_QUERY);
@@ -720,10 +794,10 @@ function SquareNineChart() {
       dimUsClosedDays,
       selectedTurningKind: bridgeTurningKind,
       turningKindByKey,
-      bestDiagonalCandidates,
+      bestDiagonalLines,
     });
   }, [
-    bestDiagonalCandidates,
+    bestDiagonalLines,
     bridgeTurningKind,
     canvasSize,
     cells,
@@ -796,14 +870,14 @@ function SquareNineChart() {
               : "lg:grid-cols-[minmax(0,1fr)_150px]"
           }`}
         >
-          <aside className="order-1 flex flex-col gap-4 transition-all duration-300 ease-in-out lg:order-2">
+          <aside className="order-1 flex min-h-0 flex-col gap-4 overflow-y-auto overscroll-contain pr-1 transition-all duration-300 ease-in-out lg:order-2 lg:h-full lg:max-h-full">
             <Card
               size="small"
               styles={{
                 body: {
-                  maxHeight: controlsOpen ? "calc(100vh - 96px)" : 0,
+                  maxHeight: controlsOpen ? "none" : 0,
                   opacity: controlsOpen ? 1 : 0,
-                  overflow: controlsOpen ? "auto" : "hidden",
+                  overflow: "hidden",
                   padding: controlsOpen ? undefined : 0,
                   pointerEvents: controlsOpen ? undefined : "none",
                   transform: controlsOpen ? "scaleY(1)" : "scaleY(0.98)",
@@ -902,6 +976,40 @@ function SquareNineChart() {
                         value={startDate}
                         onChange={(event) => setStartDate(event.target.value)}
                       />
+                    </Control>
+                  </Col>
+                )}
+
+                {matrixMode === "time" && (
+                  <Col span={24}>
+                    <Control title="转折阈值">
+                      <div className="flex flex-col gap-2">
+                        <InputNumber
+                          className="w-full"
+                          min={0.5}
+                          max={8}
+                          step={0.1}
+                          value={turningThreshold}
+                          onChange={(value) => {
+                            if (typeof value === "number") {
+                              setTurningThreshold(
+                                normalizeTurningThreshold(value),
+                              );
+                            }
+                          }}
+                        />
+                        <Slider
+                          min={0.5}
+                          max={8}
+                          step={0.1}
+                          value={turningThreshold}
+                          onChange={(value) =>
+                            setTurningThreshold(
+                              normalizeTurningThreshold(value),
+                            )
+                          }
+                        />
+                      </div>
                     </Control>
                   </Col>
                 )}
@@ -1039,21 +1147,68 @@ function SquareNineChart() {
               <Card
                 size="small"
                 title="映射信息"
-                styles={{ body: { padding: 12 } }}
+                extra={
+                  <Button
+                    size="small"
+                    type="text"
+                    onClick={() => setMappingInfoOpen((open) => !open)}
+                  >
+                    {mappingInfoOpen ? <UpOutlined /> : <DownOutlined />}
+                  </Button>
+                }
+                styles={{
+                  body: {
+                    maxHeight: mappingInfoOpen ? undefined : 0,
+                    opacity: mappingInfoOpen ? 1 : 0,
+                    overflow: "hidden",
+                    padding: mappingInfoOpen ? 12 : 0,
+                    transition:
+                      "max-height 300ms ease, opacity 180ms ease, padding 300ms ease",
+                  },
+                }}
               >
-                <TimeMappingSummary
-                  symbol={selectedTimeSymbol}
-                  bridgeInfo={bridgeInfo}
-                  loading={turningMapLoading}
-                  turningPoints={timeTurningPoints}
-                  bestDiagonalCandidates={bestDiagonalCandidates}
-                  onAnchorSelect={(candidate) => {
-                    setSelectedValue(candidate.value);
-                    setSearchValue(candidate.value);
-                    setSearchDate(candidate.date);
-                    setBridgeTurningKind(null);
-                  }}
-                />
+                <div className="flex flex-col gap-3">
+                  <Control title="转折点个数">
+                    <div className="flex flex-col gap-2">
+                      <InputNumber
+                        className="w-full"
+                        min={MIN_DIAGONAL_MIN_HIT_COUNT}
+                        max={MAX_DIAGONAL_MIN_HIT_COUNT}
+                        precision={0}
+                        step={1}
+                        value={diagonalMinHitCount}
+                        onChange={(value) =>
+                          setDiagonalMinHitCount(
+                            normalizeDiagonalMinHitCount(value),
+                          )
+                        }
+                      />
+                      <Slider
+                        min={MIN_DIAGONAL_MIN_HIT_COUNT}
+                        max={MAX_DIAGONAL_MIN_HIT_COUNT}
+                        step={1}
+                        value={diagonalMinHitCount}
+                        onChange={(value) =>
+                          setDiagonalMinHitCount(
+                            normalizeDiagonalMinHitCount(value),
+                          )
+                        }
+                      />
+                    </div>
+                  </Control>
+                  <TimeMappingSummary
+                    symbol={selectedTimeSymbol}
+                    bridgeInfo={bridgeInfo}
+                    loading={turningMapLoading}
+                    bestDiagonalLines={bestDiagonalLines}
+                    onAnchorSelect={(candidate) => {
+                      setSelectedValue(candidate.value);
+                      setSearchValue(candidate.value);
+                      setSearchDate(candidate.date);
+                      setBridgeTurningKind(null);
+                    }}
+                  />
+                </div>
               </Card>
             )}
 
@@ -1069,16 +1224,21 @@ function SquareNineChart() {
                   {validationOpen ? <UpOutlined /> : <DownOutlined />}
                 </Button>
               }
-              styles={{ body: { padding: 12 } }}
+              styles={{
+                body: {
+                  maxHeight: validationOpen ? undefined : 0,
+                  opacity: validationOpen ? 1 : 0,
+                  overflow: "hidden",
+                  padding: validationOpen ? 12 : 0,
+                  transition:
+                    "max-height 300ms ease, opacity 180ms ease, padding 300ms ease",
+                },
+              }}
             >
               <div
                 className="overflow-hidden transition-all duration-300 ease-in-out"
                 style={{
-                  maxHeight: validationOpen
-                    ? matrixMode === "time"
-                      ? 260
-                      : 260
-                    : 0,
+                  maxHeight: validationOpen ? undefined : 0,
                   opacity: validationOpen ? 1 : 0,
                 }}
               >
@@ -1157,7 +1317,11 @@ function SquareNineChart() {
                     const baseDate = parseDateInput(startDate);
                     if (baseDate)
                       setSearchDate(
-                        formatDateByOffset(baseDate, cell.value - 1),
+                        formatProjectedDateByOffset(
+                          baseDate,
+                          cell.value - 1,
+                          timeTradingCalendar,
+                        ),
                       );
                   }
                   setBridgeTurningKind(null);
@@ -1234,8 +1398,7 @@ function TimeMappingSummary({
   symbol,
   bridgeInfo,
   loading,
-  turningPoints,
-  bestDiagonalCandidates,
+  bestDiagonalLines,
   onAnchorSelect,
 }: {
   symbol: WatchSymbol | null;
@@ -1246,13 +1409,10 @@ function TimeMappingSummary({
     date?: string;
   } | null;
   loading: boolean;
-  turningPoints: TimeTurningPoint[];
-  bestDiagonalCandidates: DiagonalHitCandidate[];
-  onAnchorSelect: (candidate: DiagonalHitCandidate) => void;
+  bestDiagonalLines: DiagonalHitLine[];
+  onAnchorSelect: (line: DiagonalHitLine) => void;
 }) {
-  const mappedCount = turningPoints.filter((point) => point.cellKey).length;
-  const overflowCount = Math.max(0, turningPoints.length - mappedCount);
-  const bestHitCount = bestDiagonalCandidates[0]?.hitCount ?? 0;
+  const bestHitCount = bestDiagonalLines[0]?.hitCount ?? 0;
   const symbolText =
     symbol?.ticker ??
     bridgeInfo?.symbol ??
@@ -1274,41 +1434,35 @@ function TimeMappingSummary({
         )}
       </div>
 
-      <div className="grid grid-cols-2 gap-2 text-xs">
-        <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
-          <div className="text-slate-500">已映射</div>
-          <div className="mt-1 text-lg font-semibold text-slate-800">
-            {loading ? "-" : mappedCount}
-          </div>
-        </div>
-        <div className="rounded-md border border-slate-200 bg-white px-3 py-2">
-          <div className="text-slate-500">超出范围</div>
-          <div className="mt-1 text-lg font-semibold text-slate-800">
-            {loading ? "-" : overflowCount}
-          </div>
-        </div>
-      </div>
-
       {bestHitCount > 0 && (
         <div className="rounded-md border border-red-200 bg-red-50/70 p-2">
           <div className="mb-1 flex items-center justify-between text-xs font-semibold text-red-700">
-            <span>主要对角线锚点</span>
+            <span>主要对角线</span>
             <span>最高命中 {bestHitCount}</span>
           </div>
           <div className="flex max-h-20 flex-wrap gap-1 overflow-auto">
-            {bestDiagonalCandidates.map((candidate) => (
-              <button
-                key={candidate.key}
-                type="button"
-                onClick={() => onAnchorSelect(candidate)}
-                className="rounded border border-red-200 bg-white px-2 py-1 text-left text-xs text-red-700 transition-colors hover:border-red-400 hover:bg-red-100"
-              >
-                <span className="font-semibold">{candidate.date}</span>
-                <span className="ml-1 text-red-500">
-                  高{candidate.highCount}/低{candidate.lowCount}
-                </span>
-              </button>
-            ))}
+            {bestDiagonalLines.map((line) => {
+              const firstPoint = line.points[0];
+              if (!firstPoint) return null;
+              const lastPoint = line.points.at(-1) ?? firstPoint;
+              const dateRange =
+                firstPoint.date === lastPoint.date
+                  ? firstPoint.date
+                  : `${firstPoint.date}~${lastPoint.date}`;
+              return (
+                <button
+                  key={line.key}
+                  type="button"
+                  onClick={() => onAnchorSelect(line)}
+                  className="rounded border border-red-200 bg-white px-2 py-1 text-left text-xs text-red-700 transition-colors hover:border-red-400 hover:bg-red-100"
+                >
+                  <span className="font-semibold">{dateRange}</span>
+                  <span className="ml-1 text-red-500">
+                    高{line.highCount}/低{line.lowCount}
+                  </span>
+                </button>
+              );
+            })}
           </div>
         </div>
       )}
@@ -1397,7 +1551,7 @@ function drawChart({
   dimUsClosedDays,
   selectedTurningKind,
   turningKindByKey,
-  bestDiagonalCandidates,
+  bestDiagonalLines,
 }: {
   canvas: HTMLCanvasElement;
   width: number;
@@ -1415,7 +1569,7 @@ function drawChart({
   dimUsClosedDays: boolean;
   selectedTurningKind: "high" | "low" | null;
   turningKindByKey: Map<string, "high" | "low">;
-  bestDiagonalCandidates: DiagonalHitCandidate[];
+  bestDiagonalLines: DiagonalHitLine[];
 }) {
   const ratio = window.devicePixelRatio || 1;
   canvas.width = Math.max(1, Math.floor(width * ratio));
@@ -1448,7 +1602,7 @@ function drawChart({
   );
   paintCenterGuides(ctx, metrics, guides);
   if (matrixMode === "time") {
-    paintBestDiagonalCandidates(ctx, metrics, bestDiagonalCandidates);
+    paintBestDiagonalLines(ctx, metrics, bestDiagonalLines);
     paintSelectedTimeDiagonals(ctx, cells, metrics, selectedKey);
   }
   paintNumbers(
@@ -1669,6 +1823,57 @@ function paintNumbers(
   ctx.restore();
 }
 
+function paintBestDiagonalLines(
+  ctx: CanvasRenderingContext2D,
+  metrics: CanvasMetrics,
+  lines: DiagonalHitLine[],
+) {
+  if (lines.length === 0) return;
+
+  ctx.save();
+  ctx.lineCap = "round";
+  const bestHitCount = lines[0]?.hitCount ?? 1;
+  const gridRect = {
+    left: metrics.offsetX,
+    top: metrics.offsetY,
+    right: metrics.offsetX + metrics.gridSize,
+    bottom: metrics.offsetY + metrics.gridSize,
+  };
+
+  lines.forEach((line) => {
+    const strength = line.hitCount / bestHitCount;
+    const intercept =
+      line.slope === 1
+        ? metrics.offsetY - metrics.offsetX + line.intercept * metrics.cellSize
+        : metrics.offsetY +
+          metrics.offsetX +
+          (line.intercept + 1) * metrics.cellSize;
+    const clipped = clipDiagonalLine(line.slope, intercept, gridRect);
+    if (!clipped) return;
+
+    ctx.strokeStyle = `rgba(242, 54, 69, ${0.16 + strength * 0.34})`;
+    ctx.lineWidth = Math.max(1, metrics.cellSize * (0.032 + strength * 0.03));
+    drawLine(ctx, clipped.x1, clipped.y1, clipped.x2, clipped.y2);
+  });
+
+  ctx.setLineDash([]);
+  lines.forEach((line) => {
+    const strength = line.hitCount / bestHitCount;
+    ctx.strokeStyle = `rgba(242, 54, 69, ${0.42 + strength * 0.5})`;
+    ctx.lineWidth = Math.max(1.2, metrics.cellSize * (0.04 + strength * 0.04));
+    line.points.forEach((point) => {
+      const rect = cellRect(point.adjustedCell, metrics);
+      ctx.strokeRect(
+        rect.x + metrics.cellSize * 0.12,
+        rect.y + metrics.cellSize * 0.12,
+        rect.size - metrics.cellSize * 0.24,
+        rect.size - metrics.cellSize * 0.24,
+      );
+    });
+  });
+  ctx.restore();
+}
+
 function paintSelectedTimeDiagonals(
   ctx: CanvasRenderingContext2D,
   cells: Cell[],
@@ -1685,41 +1890,6 @@ function paintSelectedTimeDiagonals(
   ctx.lineWidth = Math.max(1.5, metrics.cellSize * 0.075);
   ctx.lineCap = "round";
   drawCellDiagonalExtensions(ctx, rect, metrics);
-  ctx.restore();
-}
-
-function paintBestDiagonalCandidates(
-  ctx: CanvasRenderingContext2D,
-  metrics: CanvasMetrics,
-  candidates: DiagonalHitCandidate[],
-) {
-  if (candidates.length === 0) return;
-
-  ctx.save();
-  ctx.lineCap = "round";
-  const bestHitCount = candidates[0]?.hitCount ?? 1;
-
-  candidates.forEach((candidate) => {
-    const rect = cellRect(candidate, metrics);
-    const strength = candidate.hitCount / bestHitCount;
-    ctx.strokeStyle = `rgba(242, 54, 69, ${0.16 + strength * 0.34})`;
-    ctx.lineWidth = Math.max(1, metrics.cellSize * (0.032 + strength * 0.03));
-    drawCellDiagonalExtensions(ctx, rect, metrics);
-  });
-
-  ctx.setLineDash([]);
-  candidates.forEach((candidate) => {
-    const rect = cellRect(candidate, metrics);
-    const strength = candidate.hitCount / bestHitCount;
-    ctx.strokeStyle = `rgba(242, 54, 69, ${0.42 + strength * 0.5})`;
-    ctx.lineWidth = Math.max(1.2, metrics.cellSize * (0.04 + strength * 0.04));
-    ctx.strokeRect(
-      rect.x + metrics.cellSize * 0.12,
-      rect.y + metrics.cellSize * 0.12,
-      rect.size - metrics.cellSize * 0.24,
-      rect.size - metrics.cellSize * 0.24,
-    );
-  });
   ctx.restore();
 }
 
@@ -1821,10 +1991,22 @@ function readSquareNineState(): StoredSquareNineState {
       bridgeInfo: parsed.bridgeInfo ?? null,
       selectedTimeSymbolTicker: parsed.selectedTimeSymbolTicker,
       dimUsClosedDays: parsed.dimUsClosedDays ?? true,
+      diagonalMinHitCount: normalizeDiagonalMinHitCount(
+        parsed.diagonalMinHitCount,
+      ),
     };
   } catch {
     return {};
   }
+}
+
+function normalizeDiagonalMinHitCount(value: unknown) {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) return DEFAULT_DIAGONAL_MIN_HIT_COUNT;
+  return Math.min(
+    MAX_DIAGONAL_MIN_HIT_COUNT,
+    Math.max(MIN_DIAGONAL_MIN_HIT_COUNT, Math.round(numeric)),
+  );
 }
 
 function writeSquareNineState(state: StoredSquareNineState) {
@@ -1851,9 +2033,9 @@ async function fetchTimeWatchSymbols() {
 async function fetchDailyMarketBars(ticker: string) {
   const to =
     Math.floor(Date.now() / REQUEST_NOW_BUCKET_MS) * REQUEST_NOW_BUCKET_MS;
-  const from = Math.max(0, to - 365 * 24 * 60 * 60 * 1000 * 4);
+  const from = Math.max(0, to - TIME_MATRIX_LOOKBACK_DAYS * DAY_MS);
   const url = new URL(`${MARKET_API_BASE}/day/${encodeURIComponent(ticker)}`);
-  url.searchParams.set("count", String(KLINE_COUNT));
+  url.searchParams.set("count", String(TIME_MATRIX_LOOKBACK_DAYS + 1));
   url.searchParams.set("refresh", "1");
   url.searchParams.set("from", String(from));
   url.searchParams.set("to", String(to));
@@ -1874,104 +2056,18 @@ async function fetchDailyMarketBars(ticker: string) {
     .sort((a: MarketBar, b: MarketBar) => a.timestamp - b.timestamp);
 }
 
-function calculateTimeTurningPoints(
-  bars: MarketBar[],
-  threshold: number,
-): TimeTurningPoint[] {
-  if (bars.length < 30) return [];
-
-  const highs = bars.map((bar) => Number(bar.high));
-  const lows = bars.map((bar) => Number(bar.low));
-  const validHighs = highs.filter(Number.isFinite);
-  const validLows = lows.filter(Number.isFinite);
-  if (validHighs.length === 0 || validLows.length === 0) return [];
-
-  const highest = Math.max(...validHighs);
-  const lowest = Math.min(...validLows);
-  const range = highest - lowest;
-  if (!Number.isFinite(range) || range <= 0) return [];
-
-  const pivotWindow = clamp(Math.floor(bars.length / 90), 5, 18);
-  const normalizedThreshold = clamp(threshold, 0.5, 8);
-  const minMove = Math.max(
-    range * (normalizedThreshold / 100),
-    calculateAverageTrueRange(bars, 14) * normalizedThreshold,
+function createTradingCalendar(bars: MarketBar[]): TradingCalendar {
+  const keys = new Set(
+    bars
+      .map((bar) => formatDateFromTimestamp(bar.timestamp))
+      .filter(Boolean),
   );
-  const candidates: TimeTurningPoint[] = [];
-
-  for (let index = pivotWindow; index < bars.length - pivotWindow; index += 1) {
-    const high = highs[index];
-    const low = lows[index];
-    if (!Number.isFinite(high) || !Number.isFinite(low)) continue;
-
-    let isHigh = true;
-    let isLow = true;
-    for (
-      let offset = index - pivotWindow;
-      offset <= index + pivotWindow;
-      offset += 1
-    ) {
-      if (offset === index) continue;
-      if (high < highs[offset]) isHigh = false;
-      if (low > lows[offset]) isLow = false;
-      if (!isHigh && !isLow) break;
-    }
-
-    const timestamp = Number(bars[index].timestamp);
-    if (isHigh) {
-      candidates.push({
-        kind: "high",
-        timestamp,
-        date: formatDateFromTimestamp(timestamp),
-        value: high,
-        index,
-        key: `high:${timestamp}:${high}`,
-      });
-    }
-    if (isLow) {
-      candidates.push({
-        kind: "low",
-        timestamp,
-        date: formatDateFromTimestamp(timestamp),
-        value: low,
-        index,
-        key: `low:${timestamp}:${low}`,
-      });
-    }
-  }
-
-  return compressTimeTurningPoints(candidates, minMove, pivotWindow).slice(-36);
-}
-
-function compressTimeTurningPoints(
-  candidates: TimeTurningPoint[],
-  minMove: number,
-  pivotWindow: number,
-) {
-  const points: TimeTurningPoint[] = [];
-  candidates
-    .sort((a, b) => a.index - b.index || (a.kind === "high" ? -1 : 1))
-    .forEach((candidate) => {
-      const last = points.at(-1);
-      if (!last) {
-        points.push(candidate);
-        return;
-      }
-
-      if (candidate.kind === last.kind) {
-        const shouldReplace =
-          candidate.kind === "high"
-            ? candidate.value >= last.value
-            : candidate.value <= last.value;
-        if (shouldReplace) points[points.length - 1] = candidate;
-        return;
-      }
-
-      const hasEnoughMove = Math.abs(candidate.value - last.value) >= minMove;
-      const hasEnoughDistance = candidate.index - last.index >= pivotWindow * 2;
-      if (hasEnoughMove || hasEnoughDistance) points.push(candidate);
-    });
-  return points;
+  const sortedKeys = Array.from(keys).sort();
+  return {
+    keys,
+    firstKey: sortedKeys[0],
+    lastKey: sortedKeys.at(-1),
+  };
 }
 
 function mapTurningPointsToTimeCells(
@@ -1996,15 +2092,19 @@ function mapTurningPointsToTimeCells(
   });
 }
 
-function calculateBestDiagonalHitCandidates(
+function calculateBestDiagonalHitLines(
   cells: Cell[],
   points: TimeTurningPoint[],
   startDate: string,
+  diagonalMinHitCount: number,
+  tradingCalendar: TradingCalendar,
 ) {
   const baseDate = parseDateInput(startDate);
   if (!baseDate) return [];
+  const minHitCount = normalizeDiagonalMinHitCount(diagonalMinHitCount);
 
   const cellByKey = new Map(cells.map((cell) => [cell.key, cell]));
+  const cellByValue = new Map(cells.map((cell) => [cell.value, cell]));
   const mappedPoints = points
     .map((point) => {
       if (!point.cellKey) return null;
@@ -2021,59 +2121,166 @@ function calculateBestDiagonalHitCandidates(
 
   if (mappedPoints.length === 0) return [];
 
-  let bestHitCount = 0;
-  const candidates: DiagonalHitCandidate[] = [];
-
-  cells.forEach((cell) => {
-    const hits = mappedPoints.filter(
-      (point) =>
-        Math.abs(point.cell.r - cell.r) === Math.abs(point.cell.c - cell.c),
-    );
-    if (hits.length === 0) return;
-
-    const hitCount = hits.length;
-    const candidate: DiagonalHitCandidate = {
-      ...cell,
-      date: formatDateByOffset(baseDate, cell.value - 1),
-      hitCount,
-      highCount: hits.filter((point) => point.kind === "high").length,
-      lowCount: hits.filter((point) => point.kind === "low").length,
-    };
-
-    if (hitCount > bestHitCount) {
-      bestHitCount = hitCount;
-      candidates.length = 0;
-      candidates.push(candidate);
-      return;
+  const groups = new Map<
+    string,
+    {
+      slope: 1 | -1;
+      intercept: number;
+      points: Map<string, DiagonalHitLinePoint>;
     }
+  >();
 
-    if (hitCount === bestHitCount) {
-      candidates.push(candidate);
-    }
+  mappedPoints.forEach((point) => {
+    getDiagonalCompatibleCells(
+      point.cell,
+      baseDate,
+      cellByValue,
+      tradingCalendar,
+    ).forEach(({ adjustedCell, adjustedDate, nonTradingAdjusted }) => {
+      addNearbyDiagonalGroups(
+        groups,
+        {
+          point,
+          adjustedCell,
+          adjustedDate,
+          nonTradingAdjusted,
+        },
+        DEFAULT_DIAGONAL_HIT_TOLERANCE,
+      );
+    });
   });
 
-  return candidates.sort((a, b) => a.value - b.value);
+  const lines: DiagonalHitLine[] = [];
+
+  groups.forEach((group, key) => {
+    const hitPoints = Array.from(group.points.values()).sort(
+      (a, b) => a.index - b.index,
+    );
+    const hitCount = hitPoints.length;
+    if (hitCount < minHitCount) return;
+
+    const representative = hitPoints[Math.floor((hitCount - 1) / 2)];
+    const line: DiagonalHitLine = {
+      key,
+      slope: group.slope,
+      intercept: group.intercept,
+      value: representative.adjustedCell.value,
+      date: formatProjectedDateByOffset(
+        baseDate,
+        representative.adjustedCell.value - 1,
+        tradingCalendar,
+      ),
+      hitCount,
+      highCount: hitPoints.filter((point) => point.kind === "high").length,
+      lowCount: hitPoints.filter((point) => point.kind === "low").length,
+      points: hitPoints,
+    };
+
+    lines.push(line);
+  });
+
+  const seenPointSets = new Set<string>();
+  return lines
+    .sort((a, b) => b.hitCount - a.hitCount || a.value - b.value)
+    .filter((line) => {
+      const signature = `${line.slope}:${line.points
+        .map((point) => point.key)
+        .join("|")}`;
+      if (seenPointSets.has(signature)) return false;
+      seenPointSets.add(signature);
+      return true;
+    })
+    .slice(0, MAX_DIAGONAL_HIT_LINES);
 }
 
-function calculateAverageTrueRange(bars: MarketBar[], period: number) {
-  const trueRanges: number[] = [];
-  for (let index = 1; index < bars.length; index += 1) {
-    const high = Number(bars[index].high);
-    const low = Number(bars[index].low);
-    const prevClose = Number(bars[index - 1].close);
-    if (![high, low, prevClose].every(Number.isFinite)) continue;
-    trueRanges.push(
-      Math.max(
-        high - low,
-        Math.abs(high - prevClose),
-        Math.abs(low - prevClose),
-      ),
-    );
+function addNearbyDiagonalGroups(
+  groups: Map<
+    string,
+    {
+      slope: 1 | -1;
+      intercept: number;
+      points: Map<string, DiagonalHitLinePoint>;
+    }
+  >,
+  {
+    point,
+    adjustedCell,
+    adjustedDate,
+    nonTradingAdjusted,
+  }: {
+    point: TimeTurningPoint & { cell: Cell };
+    adjustedCell: Cell;
+    adjustedDate: string;
+    nonTradingAdjusted: boolean;
+  },
+  tolerance: number,
+) {
+  const rawLineKeys = [
+    { slope: 1 as const, intercept: adjustedCell.r - adjustedCell.c },
+    { slope: -1 as const, intercept: adjustedCell.r + adjustedCell.c },
+  ];
+
+  rawLineKeys.forEach(({ slope, intercept }) => {
+    for (
+      let offset = -tolerance;
+      offset <= tolerance;
+      offset += 1
+    ) {
+      const nearbyIntercept = intercept + offset;
+      const key = `${slope}:${nearbyIntercept}`;
+      const group =
+        groups.get(key) ??
+        {
+          slope,
+          intercept: nearbyIntercept,
+          points: new Map<string, DiagonalHitLinePoint>(),
+        };
+      group.points.set(point.key, {
+        ...point,
+        adjustedCell,
+        adjustedDate,
+        nonTradingAdjusted,
+      });
+      groups.set(key, group);
+    }
+  });
+}
+
+function getDiagonalCompatibleCells(
+  cell: Cell,
+  baseDate: Date,
+  cellByValue: Map<number, Cell>,
+  tradingCalendar: TradingCalendar,
+) {
+  const exactDate = getDateByOffset(baseDate, cell.value - 1);
+  const cells = [
+    {
+      adjustedCell: cell,
+      adjustedDate: formatDateInput(exactDate),
+      nonTradingAdjusted: false,
+    },
+  ];
+
+  for (let value = cell.value - 1; value >= 1; value -= 1) {
+    const adjustedCell = cellByValue.get(value);
+    if (!adjustedCell) break;
+
+    const projectedDate = getDateByOffset(baseDate, adjustedCell.value - 1);
+    if (isTradingDate(projectedDate, tradingCalendar)) break;
+
+    const shiftedDate = shiftToNextTradingDate(projectedDate, tradingCalendar);
+    if (!isSameCalendarDate(shiftedDate, exactDate)) {
+      break;
+    }
+
+    cells.push({
+      adjustedCell,
+      adjustedDate: formatDateInput(projectedDate),
+      nonTradingAdjusted: true,
+    });
   }
 
-  const recent = trueRanges.slice(-period * 3);
-  if (recent.length === 0) return 0;
-  return recent.reduce((sum, value) => sum + value, 0) / recent.length;
+  return cells;
 }
 
 function normalizeApiBar(raw: Record<string, unknown>): MarketBar | null {
@@ -2249,19 +2456,6 @@ function createWatchSymbolDedupe() {
   };
 }
 
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function formatDateFromTimestamp(timestamp: number) {
-  const date = new Date(Number(timestamp));
-  if (Number.isNaN(date.getTime())) return "";
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
 function isValidDateInput(value: string) {
   return /^\d{4}-\d{2}-\d{2}$/.test(value) && Boolean(parseDateInput(value));
 }
@@ -2284,16 +2478,64 @@ function parseDateInput(value: string) {
 }
 
 function getDatePartsByOffset(baseDate: Date, offset: number) {
-  const date = new Date(baseDate);
-  date.setDate(baseDate.getDate() + offset);
-  return getDateParts(date);
+  return getDateParts(getDateByOffset(baseDate, offset));
 }
 
-function formatDateByOffset(baseDate: Date, offset: number) {
+function formatProjectedDateByOffset(
+  baseDate: Date,
+  offset: number,
+  tradingCalendar: TradingCalendar = EMPTY_TRADING_CALENDAR,
+) {
+  return formatDateInput(
+    shiftToNextTradingDate(getDateByOffset(baseDate, offset), tradingCalendar),
+  );
+}
+
+function getDateByOffset(baseDate: Date, offset: number) {
   const date = new Date(baseDate);
   date.setDate(baseDate.getDate() + offset);
+  return date;
+}
+
+function formatDateInput(date: Date) {
   const { year, monthDay } = getDateParts(date);
   return `${year}-${monthDay}`;
+}
+
+function shiftToNextTradingDate(
+  date: Date,
+  tradingCalendar: TradingCalendar = EMPTY_TRADING_CALENDAR,
+) {
+  const shifted = new Date(date);
+  for (let attempts = 0; attempts < 14; attempts += 1) {
+    if (isTradingDate(shifted, tradingCalendar)) return shifted;
+    shifted.setDate(shifted.getDate() + 1);
+  }
+  return shifted;
+}
+
+function isTradingDate(
+  date: Date,
+  tradingCalendar: TradingCalendar = EMPTY_TRADING_CALENDAR,
+) {
+  const key = toDateKey(date);
+  if (
+    tradingCalendar.firstKey &&
+    tradingCalendar.lastKey &&
+    key >= tradingCalendar.firstKey &&
+    key <= tradingCalendar.lastKey
+  ) {
+    return tradingCalendar.keys.has(key);
+  }
+  return !isUsMarketClosedDate(date);
+}
+
+function isSameCalendarDate(a: Date, b: Date) {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
 }
 
 function diffCalendarDays(from: Date, to: Date) {
