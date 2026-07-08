@@ -93,15 +93,28 @@ type ProjectionLineData = {
   label: string;
 };
 
-type BuySellSignalData = {
+type NtpSignalData = {
   text: string;
   side: "buy" | "sell";
+  slot: number;
 };
 
 type LmacdData = {
   diff?: number;
   dea?: number;
   macd?: number;
+};
+
+type LmacdSignalKind =
+  | "bottomBuy"
+  | "topSell"
+  | "bullishDivergence"
+  | "bearishDivergence";
+
+type LmacdSignalData = {
+  text: string;
+  kind: LmacdSignalKind;
+  slot: number;
 };
 
 type TurningPointHover = TurningPoint & {
@@ -153,10 +166,15 @@ const MARKET_REQUEST_CACHE_MS = 20_000;
 const MAX_SCROLL_DISTANCE = 10_000_000;
 const KLINE_RIGHT_OFFSET = 96;
 const KLINE_MAX_RIGHT_OFFSET = 720;
+const INDICATOR_PANE_ID = "indicator_pane";
 const TREND_TURNING_GROUP_ID = "trend-turning-points";
 const GANN_PROJECTION_GROUP_ID = "gann-projection-lines";
-const BUY_SELL_SIGNAL_GROUP_ID = "buy-sell-signals";
-const BUY_SELL_SIGNAL_INDICATOR = "BUYSELL";
+const NTP_SIGNAL_GROUP_ID = "ntp-signals";
+const LMACD_SIGNAL_GROUP_ID = "lmacd-signals";
+const ORB_OVERLAY_GROUP_ID = "orb-overlays";
+const NTP_INDICATOR = "NTP";
+const ORB_INDICATOR = "ORB";
+const ORB_RANGE_MINUTES = 30;
 const GANN_PROJECTION_LOOP = 9;
 const GANN_PROJECTION_POINT_LIMIT = 10;
 const visibleStockCategoryValues = new Set(["us", "cn", "hk"]);
@@ -191,10 +209,11 @@ const periodOptions: PeriodOption[] = [
   { label: "年", value: "1y", period: { type: "year", span: 1 } },
 ];
 
-const mainIndicators = ["MA", "EMA", "BOLL"];
-const paneIndicators = ["VOL", "MACD", "LMACD", BUY_SELL_SIGNAL_INDICATOR, "KDJ", "RSI", "WR"];
+const mainIndicators = ["MA", "EMA", "BOLL", ORB_INDICATOR];
+const paneIndicators = ["VOL", "MACD", "LMACD", NTP_INDICATOR, "KDJ", "RSI", "WR"];
+const defaultPaneIndicators = ["LMACD", NTP_INDICATOR];
 const drawablePaneIndicators = paneIndicators.filter(
-  (name) => name !== BUY_SELL_SIGNAL_INDICATOR,
+  (name) => name !== NTP_INDICATOR,
 );
 const adjustOptions: Array<{ label: string; value: AdjustType }> = [
   { label: "除权", value: 0 },
@@ -394,34 +413,73 @@ const gannProjectionLineOverlay: OverlayTemplate<ProjectionLineData> = {
 
 registerOverlay(gannProjectionLineOverlay);
 
-const buySellSignalOverlay: OverlayTemplate<BuySellSignalData> = {
-  name: "buySellSignal",
+const ntpSignalOverlay: OverlayTemplate<NtpSignalData> = {
+  name: "ntpSignal",
   totalStep: 1,
   needDefaultPointFigure: false,
   needDefaultXAxisFigure: false,
   needDefaultYAxisFigure: false,
   createPointFigures: ({ overlay, coordinates }) => {
     const coordinate = coordinates[0];
-    const data = overlay.extendData as BuySellSignalData;
+    const data = overlay.extendData as NtpSignalData;
     const isBuy = data.side === "buy";
     const backgroundColor = isBuy
       ? "rgba(8, 153, 129, 0.14)"
       : "rgba(242, 54, 69, 0.14)";
     const borderColor = isBuy ? "rgba(8, 153, 129, 0.72)" : "rgba(242, 54, 69, 0.72)";
-    const y = coordinate.y + (isBuy ? 18 : -18);
+    const textColor = isBuy ? "#065f46" : "#991b1b";
+    const labelY = coordinate.y + (isBuy ? 38 + data.slot * 24 : -38 - data.slot * 24);
+    const arrowBaseY = coordinate.y + (isBuy ? 10 : -10);
+    const arrowWingY = coordinate.y + (isBuy ? 18 : -18);
 
     return [
+      {
+        type: "line",
+        attrs: {
+          coordinates: [
+            { x: coordinate.x, y: labelY + (isBuy ? -12 : 12) },
+            { x: coordinate.x, y: arrowBaseY },
+          ],
+        },
+        styles: {
+          color: borderColor,
+          size: 2,
+          style: "solid",
+        },
+        ignoreEvent: true,
+      },
+      {
+        type: "polygon",
+        attrs: {
+          coordinates: isBuy
+            ? [
+                { x: coordinate.x, y: coordinate.y },
+                { x: coordinate.x - 6, y: arrowWingY },
+                { x: coordinate.x + 6, y: arrowWingY },
+              ]
+            : [
+                { x: coordinate.x, y: coordinate.y },
+                { x: coordinate.x - 6, y: arrowWingY },
+                { x: coordinate.x + 6, y: arrowWingY },
+              ],
+        },
+        styles: {
+          style: "fill",
+          color: borderColor,
+        },
+        ignoreEvent: true,
+      },
       {
         type: "text",
         attrs: {
           x: coordinate.x,
-          y,
+          y: labelY,
           text: data.text,
           align: "center",
           baseline: "middle",
         },
         styles: {
-          color: "#9d174d",
+          color: textColor,
           size: 12,
           weight: "700",
           backgroundColor,
@@ -439,7 +497,87 @@ const buySellSignalOverlay: OverlayTemplate<BuySellSignalData> = {
   },
 };
 
-registerOverlay(buySellSignalOverlay);
+registerOverlay(ntpSignalOverlay);
+
+const lmacdSignalOverlay: OverlayTemplate<LmacdSignalData> = {
+  name: "lmacdSignal",
+  totalStep: 1,
+  needDefaultPointFigure: false,
+  needDefaultXAxisFigure: false,
+  needDefaultYAxisFigure: false,
+  createPointFigures: ({ overlay, coordinates }) => {
+    const coordinate = coordinates[0];
+    const data = overlay.extendData as LmacdSignalData;
+    const isBottom =
+      data.kind === "bottomBuy" || data.kind === "bullishDivergence";
+    const isDivergence =
+      data.kind === "bullishDivergence" || data.kind === "bearishDivergence";
+    const theme = isDivergence
+      ? {
+          color: "#6b21a8",
+          backgroundColor: "rgba(147, 51, 234, 0.14)",
+          borderColor: "rgba(147, 51, 234, 0.72)",
+        }
+      : isBottom
+        ? {
+            color: "#065f46",
+            backgroundColor: "rgba(8, 153, 129, 0.14)",
+            borderColor: "rgba(8, 153, 129, 0.72)",
+          }
+        : {
+            color: "#991b1b",
+            backgroundColor: "rgba(242, 54, 69, 0.14)",
+            borderColor: "rgba(242, 54, 69, 0.72)",
+          };
+    const labelY =
+      coordinate.y + (isBottom ? 20 + data.slot * 22 : -20 - data.slot * 22);
+
+    return [
+      {
+        type: "line",
+        attrs: {
+          coordinates: [
+            { x: coordinate.x, y: coordinate.y },
+            { x: coordinate.x, y: labelY },
+          ],
+        },
+        styles: {
+          color: theme.borderColor,
+          size: 1,
+          style: "dashed",
+          dashedValue: [3, 3],
+        },
+        ignoreEvent: true,
+      },
+      {
+        type: "text",
+        attrs: {
+          x: coordinate.x,
+          y: labelY,
+          text: data.text,
+          align: "center",
+          baseline: "middle",
+        },
+        styles: {
+          color: theme.color,
+          size: 12,
+          weight: "700",
+          backgroundColor: theme.backgroundColor,
+          borderColor: theme.borderColor,
+          borderSize: 1,
+          borderRadius: 6,
+          paddingLeft: 6,
+          paddingRight: 6,
+          paddingTop: 3,
+          paddingBottom: 3,
+        },
+        ignoreEvent: true,
+      },
+    ];
+  },
+};
+
+registerOverlay(lmacdSignalOverlay);
 
 const lmacdIndicator: IndicatorTemplate<LmacdData, number> = {
   name: "LMACD",
@@ -471,55 +609,61 @@ const lmacdIndicator: IndicatorTemplate<LmacdData, number> = {
       },
     },
   ],
-  calc: (dataList, indicator) => {
-    const [shortPeriod, longPeriod, signalPeriod] = indicator.calcParams;
-    const maxPeriod = Math.max(shortPeriod, longPeriod);
-    let closeSum = 0;
-    let emaShort = 0;
-    let emaLong = 0;
-    let diff = 0;
-    let diffSum = 0;
-    let dea = 0;
-
-    return dataList.map((bar, index) => {
-      const item: LmacdData = {};
-      const close = Number(bar.close);
-      closeSum += close;
-
-      if (index >= shortPeriod - 1) {
-        emaShort =
-          index > shortPeriod - 1
-            ? (2 * close + (shortPeriod - 1) * emaShort) / (shortPeriod + 1)
-            : closeSum / shortPeriod;
-      }
-
-      if (index >= longPeriod - 1) {
-        emaLong =
-          index > longPeriod - 1
-            ? (2 * close + (longPeriod - 1) * emaLong) / (longPeriod + 1)
-            : closeSum / longPeriod;
-      }
-
-      if (index >= maxPeriod - 1) {
-        diff = emaShort - emaLong;
-        item.diff = diff;
-        diffSum += diff;
-        if (index >= maxPeriod + signalPeriod - 2) {
-          dea =
-            index > maxPeriod + signalPeriod - 2
-              ? (diff * 2 + dea * (signalPeriod - 1)) / (signalPeriod + 1)
-              : diffSum / signalPeriod;
-          item.dea = dea;
-          item.macd = (diff - dea) * 2;
-        }
-      }
-
-      return item;
-    });
-  },
+  calc: (dataList, indicator) =>
+    calculateLmacdValues(dataList, indicator.calcParams),
 };
 
 registerIndicator(lmacdIndicator);
+
+function calculateLmacdValues(
+  dataList: KLineData[],
+  calcParams: number[] = [12, 26, 9],
+) {
+  const [shortPeriod = 12, longPeriod = 26, signalPeriod = 9] = calcParams;
+  const maxPeriod = Math.max(shortPeriod, longPeriod);
+  let closeSum = 0;
+  let emaShort = 0;
+  let emaLong = 0;
+  let diff = 0;
+  let diffSum = 0;
+  let dea = 0;
+
+  return dataList.map((bar, index) => {
+    const item: LmacdData = {};
+    const close = Number(bar.close);
+    closeSum += close;
+
+    if (index >= shortPeriod - 1) {
+      emaShort =
+        index > shortPeriod - 1
+          ? (2 * close + (shortPeriod - 1) * emaShort) / (shortPeriod + 1)
+          : closeSum / shortPeriod;
+    }
+
+    if (index >= longPeriod - 1) {
+      emaLong =
+        index > longPeriod - 1
+          ? (2 * close + (longPeriod - 1) * emaLong) / (longPeriod + 1)
+          : closeSum / longPeriod;
+    }
+
+    if (index >= maxPeriod - 1) {
+      diff = emaShort - emaLong;
+      item.diff = diff;
+      diffSum += diff;
+      if (index >= maxPeriod + signalPeriod - 2) {
+        dea =
+          index > maxPeriod + signalPeriod - 2
+            ? (diff * 2 + dea * (signalPeriod - 1)) / (signalPeriod + 1)
+            : diffSum / signalPeriod;
+        item.dea = dea;
+        item.macd = (diff - dea) * 2;
+      }
+    }
+
+    return item;
+  });
+}
 
 function KLineChartPage() {
   const chartHostRef = useRef<HTMLDivElement | null>(null);
@@ -527,11 +671,12 @@ function KLineChartPage() {
   const marketBarsRef = useRef<KLineData[]>([]);
   const turningPointsRef = useRef<TurningPoint[]>([]);
   const showTurningPointsRef = useRef(true);
-  const initialTurningThreshold = useMemo(readStoredTurningThreshold, []);
+  const initialTurningThreshold = useMemo(() => readStoredTurningThreshold(), []);
   const turningThresholdRef = useRef(initialTurningThreshold);
   const projectionRef = useRef<GannProjectionPayload | null>(null);
   const projectionLineVisibleRef = useRef({ main: true, cross: false });
-  const paneIndicatorsRef = useRef<string[]>(["RSI"]);
+  const paneIndicatorsRef = useRef<string[]>(defaultPaneIndicators);
+  const mainIndicatorRef = useRef("MA");
   const [activeSymbol, setActiveSymbol] = useState<WatchSymbol>(() => ({
     ...defaultSymbol,
     ticker: readKLineActiveSymbol()?.ticker ?? defaultSymbol.ticker,
@@ -542,7 +687,8 @@ function KLineChartPage() {
   const [watchlistError, setWatchlistError] = useState<string | null>(null);
   const [periodValue, setPeriodValue] = useState("1d");
   const [mainIndicator, setMainIndicator] = useState("MA");
-  const [selectedPaneIndicators, setSelectedPaneIndicators] = useState<string[]>(["RSI"]);
+  const [selectedPaneIndicators, setSelectedPaneIndicators] =
+    useState<string[]>(defaultPaneIndicators);
   const [drawingTool, setDrawingTool] = useState<string | null>(null);
   const [zoomEnabled, setZoomEnabled] = useState(true);
   const [scrollEnabled, setScrollEnabled] = useState(true);
@@ -620,7 +766,7 @@ function KLineChartPage() {
         {
           type: "indicator",
           content: ["VOL"],
-          options: { id: "indicator_pane", height: 116, minHeight: 80 },
+          options: { id: INDICATOR_PANE_ID, height: 116, minHeight: 80 },
         },
         { type: "xAxis" },
       ],
@@ -719,10 +865,20 @@ function KLineChartPage() {
               showTurningPointsRef.current,
               turningThresholdRef.current,
             );
-            renderBuySellSignalOverlays(
+            renderNtpSignalOverlays(
               chart,
               marketBarsRef.current,
-              paneIndicatorsRef.current.includes(BUY_SELL_SIGNAL_INDICATOR),
+              paneIndicatorsRef.current.includes(NTP_INDICATOR),
+            );
+            renderLmacdSignalOverlays(
+              chart,
+              marketBarsRef.current,
+              paneIndicatorsRef.current.includes("LMACD"),
+            );
+            renderOrbOverlays(
+              chart,
+              marketBarsRef.current,
+              mainIndicatorRef.current === ORB_INDICATOR,
             );
           } catch (error) {
             console.warn("K line api failed", error);
@@ -732,7 +888,9 @@ function KLineChartPage() {
               setSelectedTurningPoint(null);
               chart.removeOverlay({ groupId: TREND_TURNING_GROUP_ID });
               chart.removeOverlay({ groupId: GANN_PROJECTION_GROUP_ID });
-              chart.removeOverlay({ groupId: BUY_SELL_SIGNAL_GROUP_ID });
+              chart.removeOverlay({ groupId: NTP_SIGNAL_GROUP_ID });
+              chart.removeOverlay({ groupId: LMACD_SIGNAL_GROUP_ID });
+              chart.removeOverlay({ groupId: ORB_OVERLAY_GROUP_ID });
               projectionRef.current = null;
             }
             callback([], {
@@ -787,7 +945,9 @@ function KLineChartPage() {
     setSelectedTurningPoint(null);
     chart.removeOverlay({ groupId: TREND_TURNING_GROUP_ID });
     chart.removeOverlay({ groupId: GANN_PROJECTION_GROUP_ID });
-    chart.removeOverlay({ groupId: BUY_SELL_SIGNAL_GROUP_ID });
+    chart.removeOverlay({ groupId: NTP_SIGNAL_GROUP_ID });
+    chart.removeOverlay({ groupId: LMACD_SIGNAL_GROUP_ID });
+    chart.removeOverlay({ groupId: ORB_OVERLAY_GROUP_ID });
     projectionRef.current = null;
     chart.setSymbol(activeSymbol);
     chart.resetData();
@@ -804,7 +964,9 @@ function KLineChartPage() {
     setSelectedTurningPoint(null);
     chartRef.current?.removeOverlay({ groupId: TREND_TURNING_GROUP_ID });
     chartRef.current?.removeOverlay({ groupId: GANN_PROJECTION_GROUP_ID });
-    chartRef.current?.removeOverlay({ groupId: BUY_SELL_SIGNAL_GROUP_ID });
+    chartRef.current?.removeOverlay({ groupId: NTP_SIGNAL_GROUP_ID });
+    chartRef.current?.removeOverlay({ groupId: LMACD_SIGNAL_GROUP_ID });
+    chartRef.current?.removeOverlay({ groupId: ORB_OVERLAY_GROUP_ID });
     projectionRef.current = null;
     chartRef.current?.resetData();
   }, [adjustType]);
@@ -821,7 +983,9 @@ function KLineChartPage() {
     setSelectedTurningPoint(null);
     chart.removeOverlay({ groupId: TREND_TURNING_GROUP_ID });
     chart.removeOverlay({ groupId: GANN_PROJECTION_GROUP_ID });
-    chart.removeOverlay({ groupId: BUY_SELL_SIGNAL_GROUP_ID });
+    chart.removeOverlay({ groupId: NTP_SIGNAL_GROUP_ID });
+    chart.removeOverlay({ groupId: LMACD_SIGNAL_GROUP_ID });
+    chart.removeOverlay({ groupId: ORB_OVERLAY_GROUP_ID });
     projectionRef.current = null;
     chart.setPeriod(activePeriod.period);
     chart.resetData();
@@ -830,10 +994,16 @@ function KLineChartPage() {
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
+    mainIndicatorRef.current = mainIndicator;
+    chart.removeOverlay({ groupId: ORB_OVERLAY_GROUP_ID });
     mainIndicators.forEach((name) =>
       chart.removeIndicator({ name, paneId: "candle_pane" }),
     );
-    chart.createIndicator(mainIndicator, true, { id: "candle_pane" });
+    if (mainIndicator === ORB_INDICATOR) {
+      renderOrbOverlays(chart, marketBarsRef.current, true);
+    } else {
+      chart.createIndicator(mainIndicator, true, { id: "candle_pane" });
+    }
   }, [mainIndicator]);
 
   useEffect(() => {
@@ -841,21 +1011,26 @@ function KLineChartPage() {
     if (!chart) return;
     paneIndicatorsRef.current = selectedPaneIndicators;
     drawablePaneIndicators.forEach((name) =>
-      chart.removeIndicator({ name, paneId: "indicator_pane" }),
+      chart.removeIndicator({ name, paneId: INDICATOR_PANE_ID }),
     );
     selectedPaneIndicators
-      .filter((name) => name !== BUY_SELL_SIGNAL_INDICATOR)
+      .filter((name) => name !== NTP_INDICATOR)
       .forEach((name) => {
         chart.createIndicator(name, false, {
-          id: "indicator_pane",
+          id: INDICATOR_PANE_ID,
           height: 116,
           minHeight: 80,
         });
       });
-    renderBuySellSignalOverlays(
+    renderNtpSignalOverlays(
       chart,
       marketBarsRef.current,
-      selectedPaneIndicators.includes(BUY_SELL_SIGNAL_INDICATOR),
+      selectedPaneIndicators.includes(NTP_INDICATOR),
+    );
+    renderLmacdSignalOverlays(
+      chart,
+      marketBarsRef.current,
+      selectedPaneIndicators.includes("LMACD"),
     );
   }, [selectedPaneIndicators]);
 
@@ -1311,6 +1486,15 @@ function TopToolbar({
         onChange={onPaneIndicatorsChange}
       />
 
+      <Space size={6} className="shrink-0 rounded-md bg-slate-50 px-2 py-1">
+        <span className="text-xs text-slate-600">转折点</span>
+        <Switch
+          size="small"
+          checked={showTurningPoints}
+          onChange={onShowTurningPointsChange}
+        />
+      </Space>
+
       <Divider type="vertical" />
 
       <Select
@@ -1718,30 +1902,38 @@ function createWatchSymbolDedupe() {
   };
 }
 
-function renderBuySellSignalOverlays(
+function renderNtpSignalOverlays(
   chart: Chart,
   bars: KLineData[],
   visible: boolean,
 ) {
-  chart.removeOverlay({ groupId: BUY_SELL_SIGNAL_GROUP_ID });
+  chart.removeOverlay({ groupId: NTP_SIGNAL_GROUP_ID });
   if (!visible || bars.length < 16) return;
 
-  const overlays = calculateBuySellSignals(bars).map<OverlayCreate>((signal) => ({
-    name: "buySellSignal",
-    groupId: BUY_SELL_SIGNAL_GROUP_ID,
-    lock: true,
-    zLevel: 24,
-    points: [{ timestamp: signal.timestamp, value: signal.value }],
-    extendData: {
-      text: signal.text,
-      side: signal.side,
-    },
-  }));
+  const stackSlots = new Map<string, number>();
+  const overlays = calculateNtpSignals(bars).map<OverlayCreate>((signal) => {
+    const stackKey = `${signal.timestamp}:${signal.side}`;
+    const slot = stackSlots.get(stackKey) ?? 0;
+    stackSlots.set(stackKey, slot + 1);
+
+    return {
+      name: "ntpSignal",
+      groupId: NTP_SIGNAL_GROUP_ID,
+      lock: true,
+      zLevel: 24,
+      points: [{ timestamp: signal.timestamp, value: signal.value }],
+      extendData: {
+        text: signal.text,
+        side: signal.side,
+        slot,
+      },
+    };
+  });
 
   if (overlays.length > 0) chart.createOverlay(overlays);
 }
 
-function calculateBuySellSignals(bars: KLineData[]) {
+function calculateNtpSignals(bars: KLineData[]) {
   const result: Array<{
     timestamp: number;
     value: number;
@@ -1761,13 +1953,11 @@ function calculateBuySellSignals(bars: KLineData[]) {
     const bar = bars[index];
     const high = Number(bar.high);
     const low = Number(bar.low);
-    const close = Number(bar.close);
-    const padding = Math.max((high - low) * 0.35, close * 0.002);
 
     if (buy1 && !previousBuy1) {
       result.push({
         timestamp: Number(bar.timestamp),
-        value: low - padding,
+        value: low,
         text: "买1",
         side: "buy",
       });
@@ -1775,7 +1965,7 @@ function calculateBuySellSignals(bars: KLineData[]) {
     if (buy2 && !previousBuy2) {
       result.push({
         timestamp: Number(bar.timestamp),
-        value: low - padding * 1.9,
+        value: low,
         text: "买2",
         side: "buy",
       });
@@ -1783,7 +1973,7 @@ function calculateBuySellSignals(bars: KLineData[]) {
     if (sell1 && !previousSell1) {
       result.push({
         timestamp: Number(bar.timestamp),
-        value: high + padding,
+        value: high,
         text: "卖1",
         side: "sell",
       });
@@ -1791,7 +1981,7 @@ function calculateBuySellSignals(bars: KLineData[]) {
     if (sell2 && !previousSell2) {
       result.push({
         timestamp: Number(bar.timestamp),
-        value: high + padding * 1.9,
+        value: high,
         text: "卖2",
         side: "sell",
       });
@@ -1801,6 +1991,295 @@ function calculateBuySellSignals(bars: KLineData[]) {
     previousBuy2 = buy2;
     previousSell1 = sell1;
     previousSell2 = sell2;
+  }
+
+  return result;
+}
+
+function renderLmacdSignalOverlays(
+  chart: Chart,
+  bars: KLineData[],
+  visible: boolean,
+) {
+  chart.removeOverlay({ groupId: LMACD_SIGNAL_GROUP_ID });
+  if (!visible || bars.length < 40) return;
+
+  const stackSlots = new Map<string, number>();
+  const overlays = calculateLmacdSignals(bars).map<OverlayCreate>(
+    (signal) => {
+      const stackSide =
+        signal.kind === "bottomBuy" || signal.kind === "bullishDivergence"
+          ? "bottom"
+          : "top";
+      const stackKey = `${signal.timestamp}:${stackSide}`;
+      const slot = stackSlots.get(stackKey) ?? 0;
+      stackSlots.set(stackKey, slot + 1);
+
+      return {
+        name: "lmacdSignal",
+        groupId: LMACD_SIGNAL_GROUP_ID,
+        paneId: INDICATOR_PANE_ID,
+        lock: true,
+        zLevel: 28,
+        points: [{ timestamp: signal.timestamp, value: signal.value }],
+        extendData: {
+          text: signal.text,
+          kind: signal.kind,
+          slot,
+        },
+      };
+    },
+  );
+
+  if (overlays.length > 0) chart.createOverlay(overlays);
+}
+
+function renderOrbOverlays(chart: Chart, bars: KLineData[], visible: boolean) {
+  chart.removeOverlay({ groupId: ORB_OVERLAY_GROUP_ID });
+  if (!visible || bars.length < 2) return;
+
+  const { ranges, signals } = calculateOrbData(bars);
+  const overlays: OverlayCreate[] = [];
+
+  ranges.forEach((range) => {
+    overlays.push(
+      {
+        name: "segment",
+        groupId: ORB_OVERLAY_GROUP_ID,
+        lock: true,
+        zLevel: 12,
+        needDefaultPointFigure: false,
+        points: [
+          { timestamp: range.startTimestamp, value: range.high },
+          { timestamp: range.endTimestamp, value: range.high },
+        ],
+        styles: {
+          line: {
+            color: "rgba(242, 54, 69, 0.72)",
+            size: 1,
+            style: "dashed",
+            dashedValue: [5, 4],
+          },
+        },
+      },
+      {
+        name: "segment",
+        groupId: ORB_OVERLAY_GROUP_ID,
+        lock: true,
+        zLevel: 12,
+        needDefaultPointFigure: false,
+        points: [
+          { timestamp: range.startTimestamp, value: range.low },
+          { timestamp: range.endTimestamp, value: range.low },
+        ],
+        styles: {
+          line: {
+            color: "rgba(8, 153, 129, 0.72)",
+            size: 1,
+            style: "dashed",
+            dashedValue: [5, 4],
+          },
+        },
+      },
+    );
+  });
+
+  const stackSlots = new Map<string, number>();
+  signals.forEach((signal) => {
+    const stackKey = `${signal.timestamp}:${signal.side}`;
+    const slot = stackSlots.get(stackKey) ?? 0;
+    stackSlots.set(stackKey, slot + 1);
+    overlays.push({
+      name: "ntpSignal",
+      groupId: ORB_OVERLAY_GROUP_ID,
+      lock: true,
+      zLevel: 26,
+      points: [{ timestamp: signal.timestamp, value: signal.value }],
+      extendData: {
+        text: signal.text,
+        side: signal.side,
+        slot,
+      },
+    });
+  });
+
+  if (overlays.length > 0) chart.createOverlay(overlays);
+}
+
+function calculateOrbData(bars: KLineData[]) {
+  const ranges: Array<{
+    startTimestamp: number;
+    endTimestamp: number;
+    high: number;
+    low: number;
+  }> = [];
+  const signals: Array<{
+    timestamp: number;
+    value: number;
+    text: string;
+    side: "buy" | "sell";
+  }> = [];
+  const sessions = groupBarsBySession(bars);
+
+  sessions.forEach((sessionBars) => {
+    if (sessionBars.length < 2) return;
+    const firstTimestamp = Number(sessionBars[0].timestamp);
+    const rangeEndTime = firstTimestamp + ORB_RANGE_MINUTES * 60 * 1000;
+    const rangeBars = sessionBars.filter(
+      (bar) => Number(bar.timestamp) < rangeEndTime,
+    );
+    if (rangeBars.length === 0 || rangeBars.length === sessionBars.length) return;
+
+    const high = Math.max(...rangeBars.map((bar) => Number(bar.high)));
+    const low = Math.min(...rangeBars.map((bar) => Number(bar.low)));
+    const lastSessionTimestamp = Number(sessionBars.at(-1)?.timestamp ?? firstTimestamp);
+    ranges.push({
+      startTimestamp: firstTimestamp,
+      endTimestamp: lastSessionTimestamp,
+      high,
+      low,
+    });
+
+    let previousClose = Number(rangeBars.at(-1)?.close);
+    for (let index = rangeBars.length; index < sessionBars.length; index += 1) {
+      const bar = sessionBars[index];
+      const close = Number(bar.close);
+      if (previousClose <= high && close > high) {
+        signals.push({
+          timestamp: Number(bar.timestamp),
+          value: Number(bar.high),
+          text: "ORB买",
+          side: "buy",
+        });
+      }
+      if (previousClose >= low && close < low) {
+        signals.push({
+          timestamp: Number(bar.timestamp),
+          value: Number(bar.low),
+          text: "ORB卖",
+          side: "sell",
+        });
+      }
+      previousClose = close;
+    }
+  });
+
+  return { ranges, signals };
+}
+
+function groupBarsBySession<T extends { timestamp?: number }>(bars: T[]) {
+  const sessions = new Map<string, T[]>();
+  bars.forEach((bar) => {
+    const timestamp = Number(bar.timestamp);
+    if (!Number.isFinite(timestamp)) return;
+    const key = new Date(timestamp).toISOString().slice(0, 10);
+    const list = sessions.get(key) ?? [];
+    list.push(bar);
+    sessions.set(key, list);
+  });
+
+  return Array.from(sessions.values()).map((sessionBars) =>
+    sessionBars.sort((a, b) => Number(a.timestamp) - Number(b.timestamp)),
+  );
+}
+
+function calculateLmacdSignals(bars: KLineData[]) {
+  const lmacdValues = calculateLmacdValues(bars);
+  const result: Array<{
+    timestamp: number;
+    value: number;
+    text: string;
+    kind: LmacdSignalKind;
+  }> = [];
+
+  for (let index = 1; index < bars.length; index += 1) {
+    const previous = lmacdValues[index - 1];
+    const current = lmacdValues[index];
+    if (!hasLmacdLines(previous) || !hasLmacdLines(current)) continue;
+
+    const crossedUp = previous.diff <= previous.dea && current.diff > current.dea;
+    const crossedDown = previous.diff >= previous.dea && current.diff < current.dea;
+
+    if (crossedUp && current.diff < 0 && current.dea < 0) {
+      result.push({
+        timestamp: Number(bars[index].timestamp),
+        value: Math.min(current.diff, current.dea, current.macd ?? current.diff),
+        text: "底部买入",
+        kind: "bottomBuy",
+      });
+    }
+
+    if (crossedDown && current.diff > 0 && current.dea > 0) {
+      result.push({
+        timestamp: Number(bars[index].timestamp),
+        value: Math.max(current.diff, current.dea, current.macd ?? current.diff),
+        text: "顶部卖出",
+        kind: "topSell",
+      });
+    }
+  }
+
+  result.push(...calculateLmacdDivergenceSignals(bars, lmacdValues));
+  return result.sort((a, b) => a.timestamp - b.timestamp);
+}
+
+function calculateLmacdDivergenceSignals(
+  bars: KLineData[],
+  lmacdValues: LmacdData[],
+) {
+  const result: Array<{
+    timestamp: number;
+    value: number;
+    text: string;
+    kind: LmacdSignalKind;
+  }> = [];
+  const pivotRadius = 3;
+  let previousLowPivot: { price: number; diff: number } | null = null;
+  let previousHighPivot: { price: number; diff: number } | null = null;
+
+  for (
+    let index = pivotRadius;
+    index < bars.length - pivotRadius;
+    index += 1
+  ) {
+    const diff = Number(lmacdValues[index]?.diff);
+    if (!Number.isFinite(diff)) continue;
+
+    if (isPricePivotLow(bars, index, pivotRadius)) {
+      const price = Number(bars[index].low);
+      if (
+        previousLowPivot &&
+        price < previousLowPivot.price &&
+        diff > previousLowPivot.diff &&
+        hasMeaningfulPriceMove(price, previousLowPivot.price)
+      ) {
+        result.push({
+          timestamp: Number(bars[index].timestamp),
+          value: diff,
+          text: "底背离",
+          kind: "bullishDivergence",
+        });
+      }
+      previousLowPivot = { price, diff };
+    }
+
+    if (isPricePivotHigh(bars, index, pivotRadius)) {
+      const price = Number(bars[index].high);
+      if (
+        previousHighPivot &&
+        price > previousHighPivot.price &&
+        diff < previousHighPivot.diff &&
+        hasMeaningfulPriceMove(price, previousHighPivot.price)
+      ) {
+        result.push({
+          timestamp: Number(bars[index].timestamp),
+          value: diff,
+          text: "顶背离",
+          kind: "bearishDivergence",
+        });
+      }
+      previousHighPivot = { price, diff };
+    }
   }
 
   return result;
@@ -1823,6 +2302,51 @@ function isContinuousCloseCompare(
   }
 
   return true;
+}
+
+function hasLmacdLines(
+  value: LmacdData | undefined,
+): value is LmacdData & { diff: number; dea: number } {
+  return Number.isFinite(value?.diff) && Number.isFinite(value?.dea);
+}
+
+function isPricePivotLow(
+  bars: KLineData[],
+  index: number,
+  radius: number,
+) {
+  const currentLow = Number(bars[index]?.low);
+  if (!Number.isFinite(currentLow)) return false;
+
+  for (let offset = -radius; offset <= radius; offset += 1) {
+    if (offset === 0) continue;
+    const low = Number(bars[index + offset]?.low);
+    if (!Number.isFinite(low) || low <= currentLow) return false;
+  }
+
+  return true;
+}
+
+function isPricePivotHigh(
+  bars: KLineData[],
+  index: number,
+  radius: number,
+) {
+  const currentHigh = Number(bars[index]?.high);
+  if (!Number.isFinite(currentHigh)) return false;
+
+  for (let offset = -radius; offset <= radius; offset += 1) {
+    if (offset === 0) continue;
+    const high = Number(bars[index + offset]?.high);
+    if (!Number.isFinite(high) || high >= currentHigh) return false;
+  }
+
+  return true;
+}
+
+function hasMeaningfulPriceMove(current: number, previous: number) {
+  const base = Math.max(Math.abs(previous), 1);
+  return Math.abs(current - previous) / base >= 0.003;
 }
 
 function renderTrendTurningPoints(
