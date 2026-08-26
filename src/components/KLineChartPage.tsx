@@ -61,6 +61,11 @@ import {
 } from "../utils/gannBridge";
 import { readKLineActiveSymbol, saveKLineActiveSymbol } from "../utils/kLineStore";
 import {
+  calculateLmacdFormulaSignals,
+  calculateLmacdFormulaValues,
+  type LmacdFormulaSignalKind,
+} from "../utils/lmacdFormula";
+import {
   findNumberPosition,
   generateGannMatrix,
   getTrendExtensionPoints,
@@ -117,11 +122,7 @@ type LmacdData = {
   macd?: number;
 };
 
-type LmacdSignalKind =
-  | "bottomBuy"
-  | "topSell"
-  | "bullishDivergence"
-  | "bearishDivergence";
+type LmacdSignalKind = LmacdFormulaSignalKind;
 
 type LmacdSignalData = {
   text: string;
@@ -636,10 +637,20 @@ const lmacdSignalOverlay: OverlayTemplate<LmacdSignalData> = {
     const coordinate = coordinates[0];
     const data = overlay.extendData as LmacdSignalData;
     const isBottom =
-      data.kind === "bottomBuy" || data.kind === "bullishDivergence";
+      data.kind === "bottomBuy" ||
+      data.kind === "bullishDivergence" ||
+      data.kind === "bottomDisappear";
     const isDivergence =
       data.kind === "bullishDivergence" || data.kind === "bearishDivergence";
-    const theme = isDivergence
+    const isDisappear =
+      data.kind === "bottomDisappear" || data.kind === "topDisappear";
+    const theme = isDisappear
+      ? {
+          color: "#166534",
+          backgroundColor: "rgba(34, 197, 94, 0.14)",
+          borderColor: "rgba(34, 197, 94, 0.72)",
+        }
+      : isDivergence
       ? {
           color: "#6b21a8",
           backgroundColor: "rgba(147, 51, 234, 0.14)",
@@ -746,50 +757,9 @@ function calculateLmacdValues(
   dataList: KLineData[],
   calcParams: number[] = [12, 26, 9],
 ) {
-  const [shortPeriod = 12, longPeriod = 26, signalPeriod = 9] = calcParams;
-  const maxPeriod = Math.max(shortPeriod, longPeriod);
-  let closeSum = 0;
-  let emaShort = 0;
-  let emaLong = 0;
-  let diff = 0;
-  let diffSum = 0;
-  let dea = 0;
-
-  return dataList.map((bar, index) => {
-    const item: LmacdData = {};
-    const close = Number(bar.close);
-    closeSum += close;
-
-    if (index >= shortPeriod - 1) {
-      emaShort =
-        index > shortPeriod - 1
-          ? (2 * close + (shortPeriod - 1) * emaShort) / (shortPeriod + 1)
-          : closeSum / shortPeriod;
-    }
-
-    if (index >= longPeriod - 1) {
-      emaLong =
-        index > longPeriod - 1
-          ? (2 * close + (longPeriod - 1) * emaLong) / (longPeriod + 1)
-          : closeSum / longPeriod;
-    }
-
-    if (index >= maxPeriod - 1) {
-      diff = emaShort - emaLong;
-      item.diff = diff;
-      diffSum += diff;
-      if (index >= maxPeriod + signalPeriod - 2) {
-        dea =
-          index > maxPeriod + signalPeriod - 2
-            ? (diff * 2 + dea * (signalPeriod - 1)) / (signalPeriod + 1)
-            : diffSum / signalPeriod;
-        item.dea = dea;
-        item.macd = (diff - dea) * 2;
-      }
-    }
-
-    return item;
-  });
+  return calculateLmacdFormulaValues(dataList, calcParams).map<LmacdData>(
+    ({ diff, dea, macd }) => ({ diff, dea, macd }),
+  );
 }
 
 function KLineChartPage() {
@@ -2559,7 +2529,9 @@ function renderLmacdSignalOverlays(
   const overlays = calculateLmacdSignals(bars).map<OverlayCreate>(
     (signal) => {
       const stackSide =
-        signal.kind === "bottomBuy" || signal.kind === "bullishDivergence"
+        signal.kind === "bottomBuy" ||
+        signal.kind === "bullishDivergence" ||
+        signal.kind === "bottomDisappear"
           ? "bottom"
           : "top";
       const stackKey = `${signal.timestamp}:${stackSide}`;
@@ -2735,105 +2707,7 @@ function groupBarsBySession<T extends { timestamp?: number }>(bars: T[]) {
 }
 
 function calculateLmacdSignals(bars: KLineData[]) {
-  const lmacdValues = calculateLmacdValues(bars);
-  const result: Array<{
-    timestamp: number;
-    value: number;
-    text: string;
-    kind: LmacdSignalKind;
-  }> = [];
-
-  for (let index = 1; index < bars.length; index += 1) {
-    const previous = lmacdValues[index - 1];
-    const current = lmacdValues[index];
-    if (!hasLmacdLines(previous) || !hasLmacdLines(current)) continue;
-
-    const crossedUp = previous.diff <= previous.dea && current.diff > current.dea;
-    const crossedDown = previous.diff >= previous.dea && current.diff < current.dea;
-
-    if (crossedUp && current.diff < 0 && current.dea < 0) {
-      result.push({
-        timestamp: Number(bars[index].timestamp),
-        value: Math.min(current.diff, current.dea, current.macd ?? current.diff),
-        text: "底部买入",
-        kind: "bottomBuy",
-      });
-    }
-
-    if (crossedDown && current.diff > 0 && current.dea > 0) {
-      result.push({
-        timestamp: Number(bars[index].timestamp),
-        value: Math.max(current.diff, current.dea, current.macd ?? current.diff),
-        text: "顶部卖出",
-        kind: "topSell",
-      });
-    }
-  }
-
-  result.push(...calculateLmacdDivergenceSignals(bars, lmacdValues));
-  return result.sort((a, b) => a.timestamp - b.timestamp);
-}
-
-function calculateLmacdDivergenceSignals(
-  bars: KLineData[],
-  lmacdValues: LmacdData[],
-) {
-  const result: Array<{
-    timestamp: number;
-    value: number;
-    text: string;
-    kind: LmacdSignalKind;
-  }> = [];
-  const pivotRadius = 3;
-  let previousLowPivot: { price: number; diff: number } | null = null;
-  let previousHighPivot: { price: number; diff: number } | null = null;
-
-  for (
-    let index = pivotRadius;
-    index < bars.length - pivotRadius;
-    index += 1
-  ) {
-    const diff = Number(lmacdValues[index]?.diff);
-    if (!Number.isFinite(diff)) continue;
-
-    if (isPricePivotLow(bars, index, pivotRadius)) {
-      const price = Number(bars[index].low);
-      if (
-        previousLowPivot &&
-        price < previousLowPivot.price &&
-        diff > previousLowPivot.diff &&
-        hasMeaningfulPriceMove(price, previousLowPivot.price)
-      ) {
-        result.push({
-          timestamp: Number(bars[index].timestamp),
-          value: diff,
-          text: "底背离",
-          kind: "bullishDivergence",
-        });
-      }
-      previousLowPivot = { price, diff };
-    }
-
-    if (isPricePivotHigh(bars, index, pivotRadius)) {
-      const price = Number(bars[index].high);
-      if (
-        previousHighPivot &&
-        price > previousHighPivot.price &&
-        diff < previousHighPivot.diff &&
-        hasMeaningfulPriceMove(price, previousHighPivot.price)
-      ) {
-        result.push({
-          timestamp: Number(bars[index].timestamp),
-          value: diff,
-          text: "顶背离",
-          kind: "bearishDivergence",
-        });
-      }
-      previousHighPivot = { price, diff };
-    }
-  }
-
-  return result;
+  return calculateLmacdFormulaSignals(bars);
 }
 
 function isContinuousCloseCompare(
@@ -2853,51 +2727,6 @@ function isContinuousCloseCompare(
   }
 
   return true;
-}
-
-function hasLmacdLines(
-  value: LmacdData | undefined,
-): value is LmacdData & { diff: number; dea: number } {
-  return Number.isFinite(value?.diff) && Number.isFinite(value?.dea);
-}
-
-function isPricePivotLow(
-  bars: KLineData[],
-  index: number,
-  radius: number,
-) {
-  const currentLow = Number(bars[index]?.low);
-  if (!Number.isFinite(currentLow)) return false;
-
-  for (let offset = -radius; offset <= radius; offset += 1) {
-    if (offset === 0) continue;
-    const low = Number(bars[index + offset]?.low);
-    if (!Number.isFinite(low) || low <= currentLow) return false;
-  }
-
-  return true;
-}
-
-function isPricePivotHigh(
-  bars: KLineData[],
-  index: number,
-  radius: number,
-) {
-  const currentHigh = Number(bars[index]?.high);
-  if (!Number.isFinite(currentHigh)) return false;
-
-  for (let offset = -radius; offset <= radius; offset += 1) {
-    if (offset === 0) continue;
-    const high = Number(bars[index + offset]?.high);
-    if (!Number.isFinite(high) || high >= currentHigh) return false;
-  }
-
-  return true;
-}
-
-function hasMeaningfulPriceMove(current: number, previous: number) {
-  const base = Math.max(Math.abs(previous), 1);
-  return Math.abs(current - previous) / base >= 0.003;
 }
 
 function renderTrendTurningPoints(
