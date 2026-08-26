@@ -10,7 +10,7 @@ export default function BacktestComingSoonPage() {
             A 股收盘信号扫描
           </Typography.Title>
           <Typography.Text type="secondary">
-            扫描全 A 股日线，分别统计最新交易日触发的 NTP 买入与 LMACD 底部买入信号。
+            扫描全 A 股日线与完整周线，分别统计 NTP、LMACD 底部买入及共振信号。
           </Typography.Text>
         </div>
 

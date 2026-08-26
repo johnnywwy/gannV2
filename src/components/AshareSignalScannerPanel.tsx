@@ -194,17 +194,10 @@ export default function AshareSignalScannerPanel() {
     [],
   );
 
-  const tabItems = result
-    ? [
-        result.groups.ntp,
-        result.groups.lmacd,
-        result.groups.confluence,
-        result.weeklyGroups.ntp,
-        result.weeklyGroups.lmacd,
-        result.weeklyGroups.confluence,
-      ].map((group) => ({
+  const buildGroupTabs = (groups: ScanResult["groups"]) =>
+    [groups.ntp, groups.lmacd, groups.confluence].map((group) => ({
         key: group.id,
-        label: `${group.name} (${group.count})`,
+        label: `${group.name.replace(/^(日线|周线)/, "")} (${group.count})`,
         children: (
           <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -229,7 +222,51 @@ export default function AshareSignalScannerPanel() {
             />
           </div>
         ),
-      }))
+      }));
+
+  const buildTimeframePanel = (
+    groups: ScanResult["groups"],
+    signalDate: string | null | undefined,
+    dateLabel: string,
+  ) => (
+    <div className="space-y-4">
+      <Row gutter={[12, 12]}>
+        <Col xs={24} md={8}>
+          <Card size="small">
+            <Statistic title="NTP 买入" value={groups.ntp.count} valueStyle={{ color: "#dc2626" }} />
+          </Card>
+        </Col>
+        <Col xs={24} md={8}>
+          <Card size="small">
+            <Statistic title="LMACD 底部买入" value={groups.lmacd.count} valueStyle={{ color: "#d97706" }} />
+          </Card>
+        </Col>
+        <Col xs={24} md={8}>
+          <Card size="small">
+            <Statistic title="NTP+LMACD 共振" value={groups.confluence.count} valueStyle={{ color: "#7c3aed" }} />
+          </Card>
+        </Col>
+      </Row>
+      <Typography.Text type="secondary" className="text-xs">
+        {dateLabel}：{formatDate(signalDate)}
+      </Typography.Text>
+      <Tabs items={buildGroupTabs(groups)} />
+    </div>
+  );
+
+  const timeframeItems = result
+    ? [
+        {
+          key: "day",
+          label: "日线",
+          children: buildTimeframePanel(result.groups, result.signalDate, "信号交易日"),
+        },
+        {
+          key: "week",
+          label: "周线",
+          children: buildTimeframePanel(result.weeklyGroups, result.weeklySignalDate, "完整周截止日"),
+        },
+      ]
     : [];
 
   return (
@@ -274,9 +311,10 @@ export default function AshareSignalScannerPanel() {
               description={
                 <div className="mt-2">
                   <Progress percent={run.progress} status="active" />
-                  <div className="text-xs text-slate-500">
-                    已处理 {run.processed} / {run.total}，失败 {run.failedCount}；当前发现 NTP {run.ntpCount}、LMACD {run.lmacdCount}、共振 {run.confluenceCount}
-                    ；周线 NTP {run.weeklyNtpCount}、LMACD {run.weeklyLmacdCount}、共振 {run.weeklyConfluenceCount}
+                  <div className="space-y-1 text-xs text-slate-500">
+                    <div>已处理 {run.processed} / {run.total}，失败 {run.failedCount}</div>
+                    <div>日线：NTP {run.ntpCount}、LMACD {run.lmacdCount}、共振 {run.confluenceCount}</div>
+                    <div>周线：NTP {run.weeklyNtpCount}、LMACD {run.weeklyLmacdCount}、共振 {run.weeklyConfluenceCount}</div>
                   </div>
                 </div>
               }
@@ -290,22 +328,14 @@ export default function AshareSignalScannerPanel() {
           {result ? (
             <>
               <Row gutter={[12, 12]}>
-                <Col xs={12} md={6}><Card size="small"><Statistic title="A 股标的" value={result.universeCount} /></Card></Col>
-                <Col xs={12} md={6}><Card size="small"><Statistic title="成功扫描" value={result.successCount} suffix={result.failedCount ? `/ 失败 ${result.failedCount}` : ""} /></Card></Col>
-                <Col xs={12} md={6}><Card size="small"><Statistic title="NTP 买入" value={result.groups.ntp.count} valueStyle={{ color: "#dc2626" }} /></Card></Col>
-                <Col xs={12} md={6}><Card size="small"><Statistic title="LMACD 底部买入" value={result.groups.lmacd.count} valueStyle={{ color: "#d97706" }} /></Card></Col>
-                <Col xs={12} md={6}><Card size="small"><Statistic title="NTP+LMACD 共振" value={result.groups.confluence.count} valueStyle={{ color: "#7c3aed" }} /></Card></Col>
-                <Col xs={12} md={6}><Card size="small"><Statistic title="周线 NTP" value={result.weeklyGroups.ntp.count} valueStyle={{ color: "#2563eb" }} /></Card></Col>
-                <Col xs={12} md={6}><Card size="small"><Statistic title="周线 LMACD" value={result.weeklyGroups.lmacd.count} valueStyle={{ color: "#0891b2" }} /></Card></Col>
-                <Col xs={12} md={6}><Card size="small"><Statistic title="周线共振" value={result.weeklyGroups.confluence.count} valueStyle={{ color: "#059669" }} /></Card></Col>
+                <Col xs={24} md={12}><Card size="small"><Statistic title="A 股标的" value={result.universeCount} /></Card></Col>
+                <Col xs={24} md={12}><Card size="small"><Statistic title="成功扫描" value={result.successCount} suffix={result.failedCount ? `/ 失败 ${result.failedCount}` : ""} /></Card></Col>
               </Row>
               <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-500">
-                <span>信号交易日：{formatDate(result.signalDate)}</span>
-                <span>周线截止日：{formatDate(result.weeklySignalDate)}</span>
                 <span>完成时间：{formatDateTime(result.completedAt)}</span>
                 <span>成功率：{result.scannedCount ? ((result.successCount / result.scannedCount) * 100).toFixed(1) : "0.0"}%</span>
               </div>
-              <Tabs items={tabItems} />
+              <Tabs tabPlacement="start" items={timeframeItems} />
             </>
           ) : (
             !loading && <Alert type="warning" showIcon message="还没有扫描结果，请点击“立即扫描”生成第一批分组。" />
