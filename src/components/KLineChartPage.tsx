@@ -11,6 +11,7 @@ import {
   LockOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  PlusOutlined,
   RiseOutlined,
   SettingOutlined,
   StockOutlined,
@@ -20,8 +21,10 @@ import {
   Card,
   Divider,
   Dropdown,
+  Empty,
   Input,
   InputNumber,
+  Modal,
   Popover,
   Select,
   Segmented,
@@ -31,6 +34,7 @@ import {
   Switch,
   Tag,
   Tooltip,
+  message,
 } from "antd";
 import {
   dispose,
@@ -51,6 +55,7 @@ import {
   GANN_PROJECTION_EVENT,
   readGannProjectionResult,
   saveGannBridgeSelection,
+  saveGannTrendSegments,
   saveGannProjectionResult,
   type GannProjectionPayload,
 } from "../utils/gannBridge";
@@ -63,12 +68,14 @@ import {
 } from "../utils/squareNine";
 import {
   calculateMajorTurningPoints,
+  buildDailyTrendSegments,
   readStoredTurningThreshold,
   formatDateFromTimestamp,
   normalizeTurningThreshold,
   saveTurningThreshold,
   type TurningPoint,
   type TurningPointKind,
+  type DailyTrendSegment,
 } from "../utils/turningPoints";
 
 type PeriodOption = {
@@ -91,6 +98,11 @@ type TurningPointMarkerData = {
 type ProjectionLineData = {
   kind: "main" | "cross";
   label: string;
+};
+
+type DailyTrendSegmentOverlayData = {
+  direction: "up" | "down";
+  intervalDays: number;
 };
 
 type NtpSignalData = {
@@ -138,8 +150,25 @@ type WatchSymbol = {
   board?: string;
   watchedAt?: string;
   watchedPrice?: string;
+  groupId?: number | null;
+  groupName?: string;
+  isSignalGroup?: boolean;
   pricePrecision: number;
   volumePrecision: number;
+};
+
+type SecuritySearchResult = {
+  symbol: string;
+  ticker?: string;
+  code?: string;
+  market?: string;
+  name?: string;
+  nameCn?: string;
+  nameHk?: string;
+  nameEn?: string;
+  exchange?: string;
+  currency?: string;
+  board?: string;
 };
 
 const defaultSymbol = {
@@ -153,16 +182,19 @@ const defaultSymbol = {
 
 const API_BASE = "https://n1-longbridge.johnnywwy.com/api";
 const STOCKS_API_URL = `${API_BASE}/stocks`;
+const WATCHLIST_SYMBOLS_API_URL = `${API_BASE}/watchlist/symbols`;
+const SECURITY_SEARCH_API_URL = `${API_BASE}/securities/search`;
 const MARKET_API_BASE = `${API_BASE}/kline`;
 const MIN_KLINE_REQUEST_COUNT = 1000;
 const MAX_KLINE_REQUEST_COUNT = 12_000;
-const DAILY_REQUEST_WINDOW_DAYS = 1000;
+const DAILY_REQUEST_WINDOW_DAYS = 10_000;
 const HOUR_REQUEST_WINDOW_DAYS = 120;
 const MINUTE_REQUEST_WINDOW_DAYS = 7;
 const HISTORY_LOAD_DEBOUNCE_MS = 280;
-const REQUEST_NOW_BUCKET_MS = 30_000;
+const REQUEST_NOW_BUCKET_MS = 10_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const MARKET_REQUEST_CACHE_MS = 20_000;
+const MARKET_REQUEST_CACHE_MS = 5_000;
+const MARKET_POLL_INTERVAL_MS = 10_000;
 const MAX_SCROLL_DISTANCE = 10_000_000;
 const KLINE_RIGHT_OFFSET = 96;
 const KLINE_MAX_RIGHT_OFFSET = 720;
@@ -172,16 +204,25 @@ const GANN_PROJECTION_GROUP_ID = "gann-projection-lines";
 const NTP_SIGNAL_GROUP_ID = "ntp-signals";
 const LMACD_SIGNAL_GROUP_ID = "lmacd-signals";
 const ORB_OVERLAY_GROUP_ID = "orb-overlays";
+const DAILY_TREND_GROUP_ID = "daily-trend-segments";
 const NTP_INDICATOR = "NTP";
 const ORB_INDICATOR = "ORB";
 const ORB_RANGE_MINUTES = 30;
 const GANN_PROJECTION_LOOP = 9;
 const GANN_PROJECTION_POINT_LIMIT = 10;
-const visibleStockCategoryValues = new Set(["us", "cn", "hk"]);
+const visibleStockCategoryValues = new Set([
+  "us",
+  "cn",
+  "hk",
+  "ntpSignals",
+  "lmacdSignals",
+]);
 const stockCategoryOptions = [
   { label: "美股", value: "us" },
   { label: "A股", value: "cn" },
   { label: "港股", value: "hk" },
+  { label: "NTP", value: "ntpSignals" },
+  { label: "LMACD", value: "lmacdSignals" },
   { label: "期权", value: "usOptions" },
   { label: "其他", value: "other" },
 ];
@@ -357,6 +398,92 @@ const trendTurnMarkerOverlay: OverlayTemplate<TurningPointMarkerData> = {
 };
 
 registerOverlay(trendTurnMarkerOverlay);
+
+const dailyTrendSegmentOverlay: OverlayTemplate<DailyTrendSegmentOverlayData> = {
+  name: "dailyTrendSegment",
+  totalStep: 2,
+  needDefaultPointFigure: false,
+  needDefaultXAxisFigure: false,
+  needDefaultYAxisFigure: false,
+  createPointFigures: ({ overlay, coordinates, bounding }) => {
+    const first = coordinates[0];
+    const second = coordinates[1];
+    if (!first || !second) return [];
+    const left = Math.min(first.x, second.x);
+    const width = Math.max(1, Math.abs(second.x - first.x));
+    const isUp = overlay.extendData.direction === "up";
+    const color = isUp ? "rgba(242, 54, 69, 0.12)" : "rgba(8, 153, 129, 0.12)";
+    const borderColor = isUp ? "rgba(242, 54, 69, 0.42)" : "rgba(8, 153, 129, 0.42)";
+    const intervalDays = Math.max(
+      1,
+      Math.round(Number(overlay.extendData.intervalDays) || 1),
+    );
+    const centerX = left + width / 2;
+    const topY = 16;
+    return [
+      {
+        type: "rect",
+        attrs: { x: left, y: 0, width, height: bounding.height },
+        styles: { style: "fill", color },
+        ignoreEvent: true,
+      },
+      {
+        type: "line",
+        attrs: { coordinates: [{ x: left, y: 0 }, { x: left, y: bounding.height }] },
+        styles: { color: borderColor, size: 1, style: "dashed", dashedValue: [3, 3] },
+        ignoreEvent: true,
+      },
+      {
+        type: "line",
+        attrs: { coordinates: [{ x: left + width, y: 0 }, { x: left + width, y: bounding.height }] },
+        styles: { color: borderColor, size: 1, style: "dashed", dashedValue: [3, 3] },
+        ignoreEvent: true,
+      },
+      {
+        type: "line",
+        attrs: {
+          coordinates: [
+            { x: left + 6, y: topY },
+            { x: left + width - 6, y: topY },
+          ],
+        },
+        styles: {
+          color: "rgba(15, 23, 42, 0.82)",
+          size: 1,
+          style: "dashed",
+          dashedValue: [6, 4],
+        },
+        ignoreEvent: true,
+      },
+      {
+        type: "text",
+        attrs: {
+          x: centerX,
+          y: topY,
+          text: `${intervalDays}`,
+          align: "center",
+          baseline: "middle",
+        },
+        styles: {
+          color: "#111827",
+          size: 11,
+          weight: "600",
+          backgroundColor: "rgba(255,255,255,0.92)",
+          borderColor: "transparent",
+          borderSize: 0,
+          borderRadius: 2,
+          paddingLeft: 4,
+          paddingRight: 4,
+          paddingTop: 1,
+          paddingBottom: 1,
+        },
+        ignoreEvent: true,
+      },
+    ];
+  },
+};
+
+registerOverlay(dailyTrendSegmentOverlay);
 
 const gannProjectionLineOverlay: OverlayTemplate<ProjectionLineData> = {
   name: "gannProjectionLine",
@@ -666,11 +793,14 @@ function calculateLmacdValues(
 }
 
 function KLineChartPage() {
+  const [messageApi, contextHolder] = message.useMessage();
   const chartHostRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<Chart | null>(null);
   const marketBarsRef = useRef<KLineData[]>([]);
   const turningPointsRef = useRef<TurningPoint[]>([]);
+  const dailyTrendSegmentsRef = useRef<DailyTrendSegment[]>([]);
   const showTurningPointsRef = useRef(true);
+  const showDailyTrendSegmentsRef = useRef(true);
   const initialTurningThreshold = useMemo(() => readStoredTurningThreshold(), []);
   const turningThresholdRef = useRef(initialTurningThreshold);
   const projectionRef = useRef<GannProjectionPayload | null>(null);
@@ -681,10 +811,19 @@ function KLineChartPage() {
     ...defaultSymbol,
     ticker: readKLineActiveSymbol()?.ticker ?? defaultSymbol.ticker,
   }));
+  const initialChartSymbolRef = useRef<WatchSymbol | null>(null);
   const [watchSymbols, setWatchSymbols] =
     useState<WatchSymbol[]>([]);
   const [watchlistLoading, setWatchlistLoading] = useState(false);
   const [watchlistError, setWatchlistError] = useState<string | null>(null);
+  const [watchlistUpdating, setWatchlistUpdating] = useState(false);
+  const [addingWatchSymbol, setAddingWatchSymbol] = useState<string | null>(null);
+  const [securitySearchOpen, setSecuritySearchOpen] = useState(false);
+  const [securitySearchKeyword, setSecuritySearchKeyword] = useState("");
+  const [securitySearchResults, setSecuritySearchResults] = useState<
+    SecuritySearchResult[]
+  >([]);
+  const [securitySearchLoading, setSecuritySearchLoading] = useState(false);
   const [periodValue, setPeriodValue] = useState("1d");
   const [mainIndicator, setMainIndicator] = useState("MA");
   const [selectedPaneIndicators, setSelectedPaneIndicators] =
@@ -693,8 +832,10 @@ function KLineChartPage() {
   const [zoomEnabled, setZoomEnabled] = useState(true);
   const [scrollEnabled, setScrollEnabled] = useState(true);
   const [showTools, setShowTools] = useState(true);
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(false);
   const [watchlistCollapsed, setWatchlistCollapsed] = useState(false);
   const [showTurningPoints, setShowTurningPoints] = useState(true);
+  const [showDailyTrendSegments, setShowDailyTrendSegments] = useState(true);
   const [turningThreshold, setTurningThreshold] = useState(
     initialTurningThreshold,
   );
@@ -715,37 +856,61 @@ function KLineChartPage() {
   const activePeriod = useMemo(
     () =>
       periodOptions.find((item) => item.value === periodValue) ??
-      periodOptions[7],
+      periodOptions.find((item) => item.value === "1d") ??
+      periodOptions[0],
     [periodValue],
   );
+  const initialChartPeriodRef = useRef<Period | null>(null);
+
+  if (initialChartSymbolRef.current === null) {
+    initialChartSymbolRef.current = activeSymbol;
+  }
+
+  if (initialChartPeriodRef.current === null) {
+    initialChartPeriodRef.current = activePeriod.period;
+  }
+
+  const loadWatchSymbols = async (options?: { preserveActive?: boolean }) => {
+    setWatchlistLoading(true);
+    setWatchlistError(null);
+    try {
+      const stocks = await fetchWatchSymbols();
+      if (stocks.length > 0) {
+        setWatchSymbols(stocks);
+        setActiveSymbol((current) => {
+          const storedTicker = readKLineActiveSymbol()?.ticker;
+          const preferredTicker = options?.preserveActive
+            ? current.ticker
+            : storedTicker ?? current.ticker;
+          const matched = stocks.find((item) => item.ticker === preferredTicker);
+          return matched ?? stocks[0];
+        });
+      } else {
+        setWatchSymbols([]);
+      }
+      return stocks;
+    } catch (error) {
+      console.warn("Stock list api fallback", error);
+      setWatchlistError("自选股接口加载失败");
+      setWatchSymbols([]);
+      throw error;
+    } finally {
+      setWatchlistLoading(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
 
     const loadStocks = async () => {
-      setWatchlistLoading(true);
-      setWatchlistError(null);
       try {
-        const stocks = await fetchWatchSymbols();
+        const stocks = await loadWatchSymbols();
         if (cancelled) return;
-        if (stocks.length > 0) {
-          setWatchSymbols(stocks);
-          setActiveSymbol((current) => {
-            const storedTicker = readKLineActiveSymbol()?.ticker;
-            const matched = stocks.find(
-              (item) => item.ticker === (storedTicker ?? current.ticker),
-            );
-            return matched ?? stocks[0];
-          });
-        }
-      } catch (error) {
+        if (stocks.length === 0) setWatchSymbols([]);
+      } catch {
         if (!cancelled) {
-          console.warn("Stock list api fallback", error);
-          setWatchlistError("自选股接口加载失败");
           setWatchSymbols([]);
         }
-      } finally {
-        if (!cancelled) setWatchlistLoading(false);
       }
     };
 
@@ -755,6 +920,89 @@ function KLineChartPage() {
       cancelled = true;
     };
   }, []);
+
+  const handleSearchSecurities = async (rawKeyword?: string) => {
+    const keyword = (rawKeyword ?? securitySearchKeyword).trim();
+
+    if (!keyword) {
+      messageApi.warning("请输入代码或名称");
+      return;
+    }
+
+    setSecuritySearchKeyword(keyword);
+    setSecuritySearchLoading(true);
+    try {
+      const results = await searchSecurities(keyword);
+      setSecuritySearchResults(results);
+      if (results.length === 0) {
+        messageApi.info("没有找到匹配标的");
+      }
+    } catch (error) {
+      console.warn("Security search failed", error);
+      messageApi.error(getErrorMessage(error, "搜索标的失败"));
+    } finally {
+      setSecuritySearchLoading(false);
+    }
+  };
+
+  const handleOpenSecuritySearch = () => {
+    setSecuritySearchOpen(true);
+    setSecuritySearchResults([]);
+    setSecuritySearchKeyword("");
+  };
+
+  const handleAddWatchSymbol = async (rawSymbol: string) => {
+    const symbol = normalizeTickerInput(rawSymbol);
+
+    if (!symbol) return;
+
+    setAddingWatchSymbol(symbol);
+    try {
+      await updateWatchlistSymbol({
+        symbol,
+        mode: "add",
+        groupId: activeSymbol.groupId ?? watchSymbols[0]?.groupId ?? null,
+      });
+      messageApi.success(`已添加 ${symbol}`);
+      const stocks = await loadWatchSymbols({ preserveActive: true });
+      const added = stocks.find((item) => item.ticker === symbol);
+      if (added) setActiveSymbol(added);
+    } catch (error) {
+      console.warn("Add watchlist symbol failed", error);
+      messageApi.error(getErrorMessage(error, "添加自选股失败"));
+    } finally {
+      setAddingWatchSymbol(null);
+    }
+  };
+
+  const handleAddSearchResult = async (item: SecuritySearchResult) => {
+    await handleAddWatchSymbol(item.symbol || item.ticker || "");
+  };
+
+  const handleRemoveWatchSymbol = async (symbol: WatchSymbol) => {
+    if (symbol.isSignalGroup) {
+      messageApi.info("收盘扫描分组由系统自动维护，不能手动删除");
+      return;
+    }
+    setWatchlistUpdating(true);
+    try {
+      await updateWatchlistSymbol({
+        symbol: symbol.ticker,
+        mode: "remove",
+        groupId: symbol.groupId ?? activeSymbol.groupId ?? null,
+      });
+      messageApi.success(`已删除 ${symbol.ticker}`);
+      const stocks = await loadWatchSymbols({ preserveActive: true });
+      if (activeSymbol.ticker === symbol.ticker && stocks.length > 0) {
+        setActiveSymbol(stocks[0]);
+      }
+    } catch (error) {
+      console.warn("Remove watchlist symbol failed", error);
+      messageApi.error(getErrorMessage(error, "删除自选股失败"));
+    } finally {
+      setWatchlistUpdating(false);
+    }
+  };
 
   useEffect(() => {
     const host = chartHostRef.current;
@@ -859,11 +1107,34 @@ function KLineChartPage() {
               bars,
               type,
             );
+            if (period.type === "day") {
+              dailyTrendSegmentsRef.current = buildDailyTrendSegments(
+                marketBarsRef.current,
+              );
+              saveGannTrendSegments(
+                dailyTrendSegmentsRef.current,
+                currentSymbol.ticker,
+                String(currentSymbol.name ?? currentSymbol.ticker),
+              );
+              renderDailyTrendSegments(
+                chart,
+                dailyTrendSegmentsRef.current,
+                showDailyTrendSegmentsRef.current,
+              );
+            } else {
+              dailyTrendSegmentsRef.current = [];
+              chart.removeOverlay({ groupId: DAILY_TREND_GROUP_ID });
+            }
             turningPointsRef.current = renderTrendTurningPoints(
               chart,
               marketBarsRef.current,
               showTurningPointsRef.current,
               turningThresholdRef.current,
+            );
+            renderDailyTrendSegments(
+              chart,
+              dailyTrendSegmentsRef.current,
+              showDailyTrendSegmentsRef.current,
             );
             renderNtpSignalOverlays(
               chart,
@@ -887,6 +1158,7 @@ function KLineChartPage() {
               turningPointsRef.current = [];
               setSelectedTurningPoint(null);
               chart.removeOverlay({ groupId: TREND_TURNING_GROUP_ID });
+              chart.removeOverlay({ groupId: DAILY_TREND_GROUP_ID });
               chart.removeOverlay({ groupId: GANN_PROJECTION_GROUP_ID });
               chart.removeOverlay({ groupId: NTP_SIGNAL_GROUP_ID });
               chart.removeOverlay({ groupId: LMACD_SIGNAL_GROUP_ID });
@@ -916,8 +1188,8 @@ function KLineChartPage() {
         await load();
       },
     });
-    chart.setSymbol(activeSymbol);
-    chart.setPeriod(activePeriod.period);
+    if (initialChartSymbolRef.current) chart.setSymbol(initialChartSymbolRef.current);
+    if (initialChartPeriodRef.current) chart.setPeriod(initialChartPeriodRef.current);
     chart.createIndicator("MA", true, { id: "candle_pane" });
     chart.setMaxOffsetLeftDistance(MAX_SCROLL_DISTANCE);
     chart.setMaxOffsetRightDistance(KLINE_MAX_RIGHT_OFFSET);
@@ -941,9 +1213,11 @@ function KLineChartPage() {
     if (!chart) return;
     saveKLineActiveSymbol(activeSymbol);
     marketBarsRef.current = [];
+    dailyTrendSegmentsRef.current = [];
     turningPointsRef.current = [];
     setSelectedTurningPoint(null);
     chart.removeOverlay({ groupId: TREND_TURNING_GROUP_ID });
+    chart.removeOverlay({ groupId: DAILY_TREND_GROUP_ID });
     chart.removeOverlay({ groupId: GANN_PROJECTION_GROUP_ID });
     chart.removeOverlay({ groupId: NTP_SIGNAL_GROUP_ID });
     chart.removeOverlay({ groupId: LMACD_SIGNAL_GROUP_ID });
@@ -960,9 +1234,11 @@ function KLineChartPage() {
       return;
     }
     marketBarsRef.current = [];
+    dailyTrendSegmentsRef.current = [];
     turningPointsRef.current = [];
     setSelectedTurningPoint(null);
     chartRef.current?.removeOverlay({ groupId: TREND_TURNING_GROUP_ID });
+    chartRef.current?.removeOverlay({ groupId: DAILY_TREND_GROUP_ID });
     chartRef.current?.removeOverlay({ groupId: GANN_PROJECTION_GROUP_ID });
     chartRef.current?.removeOverlay({ groupId: NTP_SIGNAL_GROUP_ID });
     chartRef.current?.removeOverlay({ groupId: LMACD_SIGNAL_GROUP_ID });
@@ -979,9 +1255,11 @@ function KLineChartPage() {
       return;
     }
     marketBarsRef.current = [];
+    dailyTrendSegmentsRef.current = [];
     turningPointsRef.current = [];
     setSelectedTurningPoint(null);
     chart.removeOverlay({ groupId: TREND_TURNING_GROUP_ID });
+    chart.removeOverlay({ groupId: DAILY_TREND_GROUP_ID });
     chart.removeOverlay({ groupId: GANN_PROJECTION_GROUP_ID });
     chart.removeOverlay({ groupId: NTP_SIGNAL_GROUP_ID });
     chart.removeOverlay({ groupId: LMACD_SIGNAL_GROUP_ID });
@@ -989,7 +1267,33 @@ function KLineChartPage() {
     projectionRef.current = null;
     chart.setPeriod(activePeriod.period);
     chart.resetData();
-  }, [activePeriod]);
+  }, [activePeriod, periodValue]);
+
+  useEffect(() => {
+    if (!autoRefreshEnabled) return;
+    if (activePeriod.period.type !== "minute") return;
+
+    const timer = window.setInterval(() => {
+      marketRequestCache.clear();
+      chartRef.current?.resetData();
+    }, MARKET_POLL_INTERVAL_MS);
+
+    return () => window.clearInterval(timer);
+  }, [
+    activePeriod.period.type,
+    activePeriod.period.span,
+    activeSymbol.ticker,
+    autoRefreshEnabled,
+  ]);
+
+  useEffect(() => {
+    showDailyTrendSegmentsRef.current = showDailyTrendSegments;
+    renderDailyTrendSegments(
+      chartRef.current,
+      dailyTrendSegmentsRef.current,
+      showDailyTrendSegments,
+    );
+  }, [showDailyTrendSegments]);
 
   useEffect(() => {
     const chart = chartRef.current;
@@ -1181,6 +1485,7 @@ function KLineChartPage() {
 
   return (
     <main className="h-screen overflow-hidden bg-[#f5f5f5] pb-24">
+      {contextHolder}
       <section className="flex h-full min-h-0 gap-3 bg-[#f7f9fc] p-3">
         <WatchlistCard
           symbols={watchSymbols}
@@ -1189,6 +1494,7 @@ function KLineChartPage() {
           error={watchlistError}
           collapsed={watchlistCollapsed}
           onCollapsedChange={setWatchlistCollapsed}
+          onOpenSearch={handleOpenSecuritySearch}
           onSelect={setActiveSymbol}
         />
 
@@ -1200,8 +1506,10 @@ function KLineChartPage() {
             selectedPaneIndicators={selectedPaneIndicators}
             zoomEnabled={zoomEnabled}
             scrollEnabled={scrollEnabled}
+            autoRefreshEnabled={autoRefreshEnabled}
             showTools={showTools}
             showTurningPoints={showTurningPoints}
+            showDailyTrendSegments={showDailyTrendSegments}
             turningThreshold={turningThreshold}
             showMainProjection={showMainProjection}
             showCrossProjection={showCrossProjection}
@@ -1210,13 +1518,18 @@ function KLineChartPage() {
             onPaneIndicatorsChange={setSelectedPaneIndicators}
             onZoomEnabledChange={setZoomEnabled}
             onScrollEnabledChange={setScrollEnabled}
+            onAutoRefreshEnabledChange={setAutoRefreshEnabled}
             onShowToolsChange={setShowTools}
             onShowTurningPointsChange={setShowTurningPoints}
+            onShowDailyTrendSegmentsChange={setShowDailyTrendSegments}
             onTurningThresholdChange={setTurningThreshold}
             onShowMainProjectionChange={setShowMainProjection}
             onShowCrossProjectionChange={setShowCrossProjection}
             adjustType={adjustType}
             onAdjustTypeChange={setAdjustType}
+            watchlistUpdating={watchlistUpdating}
+            canRemoveSymbol={!activeSymbol.isSignalGroup}
+            onRemoveSymbol={() => handleRemoveWatchSymbol(activeSymbol)}
           />
 
           <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -1251,6 +1564,17 @@ function KLineChartPage() {
           </div>
         </section>
       </section>
+      <SecuritySearchModal
+        open={securitySearchOpen}
+        keyword={securitySearchKeyword}
+        results={securitySearchResults}
+        loading={securitySearchLoading}
+        addingSymbol={addingWatchSymbol}
+        onKeywordChange={setSecuritySearchKeyword}
+        onSearch={handleSearchSecurities}
+        onAdd={handleAddSearchResult}
+        onClose={() => setSecuritySearchOpen(false)}
+      />
     </main>
   );
 }
@@ -1323,8 +1647,10 @@ function TopToolbar({
   selectedPaneIndicators,
   zoomEnabled,
   scrollEnabled,
+  autoRefreshEnabled,
   showTools,
   showTurningPoints,
+  showDailyTrendSegments,
   turningThreshold,
   showMainProjection,
   showCrossProjection,
@@ -1333,13 +1659,18 @@ function TopToolbar({
   onPaneIndicatorsChange,
   onZoomEnabledChange,
   onScrollEnabledChange,
+  onAutoRefreshEnabledChange,
   onShowToolsChange,
   onShowTurningPointsChange,
+  onShowDailyTrendSegmentsChange,
   onTurningThresholdChange,
   onShowMainProjectionChange,
   onShowCrossProjectionChange,
   adjustType,
   onAdjustTypeChange,
+  watchlistUpdating,
+  canRemoveSymbol,
+  onRemoveSymbol,
 }: {
   symbol: WatchSymbol;
   periodValue: string;
@@ -1347,8 +1678,10 @@ function TopToolbar({
   selectedPaneIndicators: string[];
   zoomEnabled: boolean;
   scrollEnabled: boolean;
+  autoRefreshEnabled: boolean;
   showTools: boolean;
   showTurningPoints: boolean;
+  showDailyTrendSegments: boolean;
   turningThreshold: number;
   showMainProjection: boolean;
   showCrossProjection: boolean;
@@ -1357,13 +1690,18 @@ function TopToolbar({
   onPaneIndicatorsChange: (value: string[]) => void;
   onZoomEnabledChange: (value: boolean) => void;
   onScrollEnabledChange: (value: boolean) => void;
+  onAutoRefreshEnabledChange: (value: boolean) => void;
   onShowToolsChange: (value: boolean) => void;
   onShowTurningPointsChange: (value: boolean) => void;
+  onShowDailyTrendSegmentsChange: (value: boolean) => void;
   onTurningThresholdChange: (value: number) => void;
   onShowMainProjectionChange: (value: boolean) => void;
   onShowCrossProjectionChange: (value: boolean) => void;
   adjustType: AdjustType;
   onAdjustTypeChange: (value: AdjustType) => void;
+  watchlistUpdating: boolean;
+  canRemoveSymbol: boolean;
+  onRemoveSymbol: () => void;
 }) {
   const settings = (
     <Space direction="vertical" size={12}>
@@ -1389,6 +1727,13 @@ function TopToolbar({
           size="small"
           checked={showTurningPoints}
           onChange={onShowTurningPointsChange}
+        />
+      </SettingRow>
+      <SettingRow label="日线趋势分段">
+        <Switch
+          size="small"
+          checked={showDailyTrendSegments}
+          onChange={onShowDailyTrendSegmentsChange}
         />
       </SettingRow>
       <SettingRow label="主线">
@@ -1451,6 +1796,7 @@ function TopToolbar({
           <Button
             key={item.value}
             size="small"
+            className="min-w-[44px] px-2 font-medium tracking-normal"
             type={periodValue === item.value ? "primary" : "text"}
             onClick={() => onPeriodChange(item.value)}
           >
@@ -1486,15 +1832,6 @@ function TopToolbar({
         onChange={onPaneIndicatorsChange}
       />
 
-      <Space size={6} className="shrink-0 rounded-md bg-slate-50 px-2 py-1">
-        <span className="text-xs text-slate-600">转折点</span>
-        <Switch
-          size="small"
-          checked={showTurningPoints}
-          onChange={onShowTurningPointsChange}
-        />
-      </Space>
-
       <Divider type="vertical" />
 
       <Select
@@ -1511,11 +1848,33 @@ function TopToolbar({
         实时区间
       </Button>
 
+      <Space size={6} className="shrink-0 rounded-md bg-slate-50 px-2 py-1">
+        <span className="text-xs text-slate-600">自动刷新</span>
+        <Switch
+          size="small"
+          checked={autoRefreshEnabled}
+          onChange={onAutoRefreshEnabledChange}
+        />
+      </Space>
+
       <Popover placement="bottomRight" trigger="click" content={settings}>
         <Button size="small" type="text" icon={<SettingOutlined />}>
           设置
         </Button>
       </Popover>
+
+      {canRemoveSymbol && (
+        <Tooltip title={`删除当前自选股 ${symbol.ticker}`}>
+          <Button
+            danger
+            size="small"
+            type="text"
+            icon={<DeleteOutlined />}
+            loading={watchlistUpdating}
+            onClick={onRemoveSymbol}
+          />
+        </Tooltip>
+      )}
     </header>
   );
 }
@@ -1527,6 +1886,7 @@ function WatchlistCard({
   error,
   collapsed,
   onCollapsedChange,
+  onOpenSearch,
   onSelect,
 }: {
   symbols: WatchSymbol[];
@@ -1535,6 +1895,7 @@ function WatchlistCard({
   error: string | null;
   collapsed: boolean;
   onCollapsedChange: (collapsed: boolean) => void;
+  onOpenSearch: () => void;
   onSelect: (symbol: WatchSymbol) => void;
 }) {
   const [activeCategory, setActiveCategory] = useState("us");
@@ -1544,7 +1905,12 @@ function WatchlistCard({
       ...option,
       count: symbols.filter((item) => item.category === option.value).length,
     }))
-    .filter((option) => option.count > 0);
+    .filter(
+      (option) =>
+        option.count > 0 ||
+        option.value === "ntpSignals" ||
+        option.value === "lmacdSignals",
+    );
   const selectedCategory = visibleCategoryOptions.some(
     (option) => option.value === activeCategory,
   )
@@ -1595,14 +1961,24 @@ function WatchlistCard({
         size="small"
         title="自选股"
         extra={
-          <Tooltip title="折叠自选股">
-            <Button
-              size="small"
-              type="text"
-              icon={<MenuFoldOutlined />}
-              onClick={() => onCollapsedChange(true)}
-            />
-          </Tooltip>
+          <Space size={2}>
+            <Tooltip title="搜索添加自选股">
+              <Button
+                size="small"
+                type="text"
+                icon={<PlusOutlined />}
+                onClick={onOpenSearch}
+              />
+            </Tooltip>
+            <Tooltip title="折叠自选股">
+              <Button
+                size="small"
+                type="text"
+                icon={<MenuFoldOutlined />}
+                onClick={() => onCollapsedChange(true)}
+              />
+            </Tooltip>
+          </Space>
         }
         className="h-full"
         styles={{ body: { height: "calc(100% - 38px)", padding: 8 } }}
@@ -1661,6 +2037,90 @@ function WatchlistCard({
         </div>
       </Card>
     </aside>
+  );
+}
+
+function SecuritySearchModal({
+  open,
+  keyword,
+  results,
+  loading,
+  addingSymbol,
+  onKeywordChange,
+  onSearch,
+  onAdd,
+  onClose,
+}: {
+  open: boolean;
+  keyword: string;
+  results: SecuritySearchResult[];
+  loading: boolean;
+  addingSymbol: string | null;
+  onKeywordChange: (value: string) => void;
+  onSearch: (keyword?: string) => void;
+  onAdd: (item: SecuritySearchResult) => void;
+  onClose: () => void;
+}) {
+  return (
+    <Modal
+      title="添加自选股"
+      open={open}
+      footer={null}
+      width={560}
+      onCancel={onClose}
+      destroyOnHidden
+    >
+      <div className="flex flex-col gap-3">
+        <Input.Search
+          autoFocus
+          allowClear
+          placeholder="输入股票代码或名称，例如 Tesla、腾讯、AAPL"
+          value={keyword}
+          loading={loading}
+          enterButton="搜索"
+          onChange={(event) => onKeywordChange(event.target.value)}
+          onSearch={(value) => onSearch(value)}
+        />
+        <div className="max-h-[420px] overflow-auto rounded-md border border-slate-200">
+          <Spin spinning={Boolean(addingSymbol)} tip="正在添加自选股">
+            {results.length === 0 && !loading ? (
+              <div className="py-10">
+                <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="输入关键词搜索" />
+              </div>
+            ) : (
+              results.map((item) => (
+                <div
+                  key={item.symbol}
+                  className="flex items-center justify-between gap-3 border-b border-slate-100 px-3 py-2 last:border-b-0"
+                >
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-semibold text-slate-900">
+                        {item.symbol}
+                      </span>
+                      <Tag bordered={false}>{item.market || "--"}</Tag>
+                    </div>
+                    <div className="mt-1 truncate text-xs text-slate-500">
+                      {item.nameCn || item.name || item.nameEn || item.nameHk || item.symbol}
+                    </div>
+                  </div>
+                  <Tooltip title="添加到自选股">
+                    <Button
+                      size="small"
+                      type="primary"
+                      icon={<PlusOutlined />}
+                      loading={addingSymbol === item.symbol}
+                      disabled={Boolean(addingSymbol)}
+                      onClick={() => onAdd(item)}
+                    />
+                  </Tooltip>
+                </div>
+              ))
+            )}
+          </Spin>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -1762,6 +2222,9 @@ function normalizeWatchSymbol(raw: Record<string, unknown>): WatchSymbol | null 
     getStringValue(raw.exchange) ||
     suffixMarket ||
     "";
+  const category =
+    getStringValue(raw.category ?? raw.__category) ||
+    inferStockCategory(ticker, market, getStringValue(raw.board));
   return {
     ticker,
     name:
@@ -1772,9 +2235,7 @@ function normalizeWatchSymbol(raw: Record<string, unknown>): WatchSymbol | null 
       nameEn ||
       ticker,
     market,
-    category:
-      getStringValue(raw.category ?? raw.__category) ||
-      inferStockCategory(ticker, market, getStringValue(raw.board)),
+    category,
     nameCn,
     nameHk,
     nameEn,
@@ -1783,9 +2244,98 @@ function normalizeWatchSymbol(raw: Record<string, unknown>): WatchSymbol | null 
     board: getStringValue(raw.board),
     watchedAt: getStringValue(raw.watchedAt),
     watchedPrice,
+    groupId: normalizeGroupId(raw.groupId ?? raw.group_id),
+    groupName: getStringValue(raw.groupName ?? raw.group_name),
+    isSignalGroup: category === "ntpSignals" || category === "lmacdSignals",
     pricePrecision: Number(raw.pricePrecision ?? 2),
     volumePrecision: Number(raw.volumePrecision ?? 2),
   };
+}
+
+function normalizeGroupId(value: unknown) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function normalizeTickerInput(value: string) {
+  return value.trim().toUpperCase();
+}
+
+async function updateWatchlistSymbol({
+  symbol,
+  mode,
+  groupId,
+}: {
+  symbol: string;
+  mode: "add" | "remove";
+  groupId?: number | null;
+}) {
+  const response = await fetch(WATCHLIST_SYMBOLS_API_URL, {
+    method: mode === "add" ? "POST" : "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ symbol, groupId }),
+  });
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    throw new Error(
+      getStringValue(payload?.message) ||
+        `Watchlist ${mode} api failed: ${response.status}`,
+    );
+  }
+
+  return response.json();
+}
+
+async function searchSecurities(keyword: string) {
+  const url = new URL(SECURITY_SEARCH_API_URL);
+  url.searchParams.set("q", keyword);
+  url.searchParams.set("limit", "30");
+
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    throw new Error(
+      getStringValue(payload?.message) ||
+        `Security search api failed: ${response.status}`,
+    );
+  }
+
+  const payload = await response.json();
+  const data = Array.isArray(payload?.data) ? payload.data : [];
+
+  return data
+    .map(normalizeSecuritySearchResult)
+    .filter(
+      (item: SecuritySearchResult | null): item is SecuritySearchResult =>
+        item !== null,
+    );
+}
+
+function normalizeSecuritySearchResult(
+  raw: Record<string, unknown>,
+): SecuritySearchResult | null {
+  const symbol = getStringValue(raw.symbol ?? raw.ticker);
+  if (!symbol) return null;
+
+  return {
+    symbol,
+    ticker: getStringValue(raw.ticker) || symbol,
+    code: getStringValue(raw.code),
+    market: getStringValue(raw.market),
+    name: getStringValue(raw.name),
+    nameCn: getStringValue(raw.nameCn),
+    nameHk: getStringValue(raw.nameHk),
+    nameEn: getStringValue(raw.nameEn),
+    exchange: getStringValue(raw.exchange),
+    currency: getStringValue(raw.currency),
+    board: getStringValue(raw.board),
+  };
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.message ? error.message : fallback;
 }
 
 function inferStockCategory(ticker: string, market: string, board: string) {
@@ -1896,8 +2446,9 @@ function getStringValue(value: unknown) {
 function createWatchSymbolDedupe() {
   const seen = new Set<string>();
   return (item: WatchSymbol) => {
-    if (seen.has(item.ticker)) return false;
-    seen.add(item.ticker);
+    const key = `${item.category || "other"}:${item.ticker}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
     return true;
   };
 }
@@ -2461,6 +3012,38 @@ function findTurningPointByPixel(
     }
   }
   return null;
+}
+
+function renderDailyTrendSegments(
+  chart: Chart | null,
+  segments: DailyTrendSegment[],
+  visible: boolean,
+) {
+  if (!chart) return;
+  chart.removeOverlay({ groupId: DAILY_TREND_GROUP_ID });
+  if (!visible || segments.length === 0) return;
+
+  chart.createOverlay(
+    segments.map((segment) => ({
+      name: "dailyTrendSegment",
+      groupId: DAILY_TREND_GROUP_ID,
+      lock: true,
+      zLevel: 1,
+      points: [
+        { timestamp: segment.startTimestamp, value: segment.startPrice },
+        { timestamp: segment.endTimestamp, value: segment.endPrice },
+      ],
+      extendData: {
+        direction: segment.direction,
+        intervalDays: Math.max(
+          1,
+          Math.round(
+            Math.abs(segment.endTimestamp - segment.startTimestamp) / DAY_MS,
+          ),
+        ),
+      },
+    })),
+  );
 }
 
 function calculateGannProjectionFromPrice(

@@ -1,14 +1,16 @@
-import { AppstoreOutlined, ExperimentOutlined, StockOutlined } from '@ant-design/icons'
+import { AppstoreOutlined, BarChartOutlined, ExperimentOutlined, StockOutlined } from '@ant-design/icons'
 import { Button } from 'antd'
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import BacktestComingSoonPage from './components/BacktestComingSoonPage'
 import KLineChartPage from './components/KLineChartPage'
 import SquareNineChart from './components/SquareNineChart'
+import StatisticsPage from './components/StatisticsPage'
 
 const menuItems = [
   { path: '/', label: '九方图', icon: <AppstoreOutlined /> },
   { path: '/kline', label: 'K线图', icon: <StockOutlined /> },
   { path: '/backtest', label: '回溯测试', icon: <ExperimentOutlined /> },
+  { path: '/statistics', label: '统计', icon: <BarChartOutlined /> },
 ]
 
 function App() {
@@ -31,6 +33,7 @@ function AnimatedRoutes() {
         <Route path="/" element={<SquareNineChart />} />
         <Route path="/kline" element={<KLineChartPage />} />
         <Route path="/backtest" element={<BacktestComingSoonPage />} />
+        <Route path="/statistics" element={<StatisticsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </div>

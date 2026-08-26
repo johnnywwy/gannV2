@@ -45,13 +45,11 @@ import {
   readGannBridgeSelection,
   saveGannProjectionResult,
   type GannBridgePayload,
+  type GannTrendSegment,
 } from "../utils/gannBridge";
 import {
-  calculateMajorTurningPoints,
+  buildDailyTrendSegments,
   formatDateFromTimestamp,
-  normalizeTurningThreshold,
-  readStoredTurningThreshold,
-  saveTurningThreshold,
   type TurningPoint,
 } from "../utils/turningPoints";
 
@@ -74,8 +72,8 @@ type StoredSquareNineState = {
     turningKind?: "high" | "low";
     date?: string;
   } | null;
+  trendSegments?: GannTrendSegment[];
   selectedTimeSymbolTicker?: string;
-  diagonalMinHitCount?: number;
 };
 
 type Cell = MatrixPoint & {
@@ -153,7 +151,7 @@ const DEFAULT_START_DATE = "2024-01-01";
 const API_BASE = "https://n1-longbridge.johnnywwy.com/api";
 const STOCKS_API_URL = `${API_BASE}/stocks`;
 const MARKET_API_BASE = `${API_BASE}/kline`;
-const TIME_MATRIX_LOOKBACK_DAYS = 1000;
+const TIME_MATRIX_LOOKBACK_DAYS = 10_000;
 const REQUEST_NOW_BUCKET_MS = 30_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_DIAGONAL_HIT_LINES = 8;
@@ -207,11 +205,8 @@ function SquareNineChart() {
   const [dimUsClosedDays, setDimUsClosedDays] = useState(
     storedState.dimUsClosedDays ?? true,
   );
-  const [turningThreshold, setTurningThreshold] = useState(
-    readStoredTurningThreshold,
-  );
-  const [diagonalMinHitCount, setDiagonalMinHitCount] = useState(() =>
-    normalizeDiagonalMinHitCount(storedState.diagonalMinHitCount),
+  const [trendSegments, setTrendSegments] = useState<GannTrendSegment[]>(
+    storedState.trendSegments ?? [],
   );
   const [hoverKey, setHoverKey] = useState<string | null>(null);
   const [guideOptions, setGuideOptions] = useState<GuideOption[]>([
@@ -221,7 +216,6 @@ function SquareNineChart() {
   ]);
   const [extraGuidesOpen, setExtraGuidesOpen] = useState(false);
   const [controlsOpen, setControlsOpen] = useState(true);
-  const [mappingInfoOpen, setMappingInfoOpen] = useState(true);
   const [validationOpen, setValidationOpen] = useState(true);
   const [bridgeTurningKind, setBridgeTurningKind] = useState<
     "high" | "low" | null
@@ -244,9 +238,8 @@ function SquareNineChart() {
   const [timeTurningPoints, setTimeTurningPoints] = useState<
     TimeTurningPoint[]
   >([]);
-  const [timeTradingCalendar, setTimeTradingCalendar] = useState<TradingCalendar>(
-    EMPTY_TRADING_CALENDAR,
-  );
+  const [timeTradingCalendar, setTimeTradingCalendar] =
+    useState<TradingCalendar>(EMPTY_TRADING_CALENDAR);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const chartWrapRef = useRef<HTMLDivElement | null>(null);
   const hoverKeyRef = useRef<string | null>(null);
@@ -288,9 +281,6 @@ function SquareNineChart() {
       size,
     ],
   );
-  const cellSizeLabel = Number.isInteger(effectiveCellSize)
-    ? effectiveCellSize
-    : effectiveCellSize.toFixed(1);
   const canvasSize = useMemo(() => {
     const gridSize = size * effectiveCellSize;
     if (!isAutoFitActive) return { width: gridSize, height: gridSize };
@@ -381,24 +371,6 @@ function SquareNineChart() {
     });
     return markers;
   }, [timeTurningPoints]);
-  const bestDiagonalLines = useMemo(
-    () =>
-      calculateBestDiagonalHitLines(
-        cells,
-        timeTurningPoints,
-        startDate,
-        diagonalMinHitCount,
-        timeTradingCalendar,
-      ),
-    [
-      cells,
-      diagonalMinHitCount,
-      startDate,
-      timeTradingCalendar,
-      timeTurningPoints,
-    ],
-  );
-
   const locateValue = useCallback(() => {
     const value = Math.round(Number(searchValue));
     if (!Number.isFinite(value)) return;
@@ -443,6 +415,7 @@ function SquareNineChart() {
       setSelectedValue(value);
       setSearchValue(value);
       setBridgeTurningKind(payload.turningKind ?? null);
+      setTrendSegments(payload.trendSegments ?? []);
       setBridgeInfo({
         symbol: payload.symbol,
         symbolName: payload.symbolName,
@@ -623,13 +596,12 @@ function SquareNineChart() {
       dimUsClosedDays,
       bridgeTurningKind,
       bridgeInfo,
+      trendSegments,
       selectedTimeSymbolTicker,
-      diagonalMinHitCount,
     });
   }, [
     bridgeInfo,
     bridgeTurningKind,
-    diagonalMinHitCount,
     dimUsClosedDays,
     matrixMode,
     rowColumn,
@@ -638,12 +610,9 @@ function SquareNineChart() {
     selectedValue,
     selectedTimeSymbolTicker,
     startDate,
+    trendSegments,
     trend,
   ]);
-
-  useEffect(() => {
-    saveTurningThreshold(turningThreshold);
-  }, [turningThreshold]);
 
   useEffect(() => {
     if (matrixMode !== "time" || watchSymbols.length > 0) {
@@ -690,19 +659,16 @@ function SquareNineChart() {
       try {
         const bars = await fetchDailyMarketBars(selectedTimeSymbol.ticker);
         const tradingCalendar = createTradingCalendar(bars);
-        const points = mapTurningPointsToTimeCells(
-          calculateMajorTurningPoints(bars, turningThreshold).map(
-            (point) => ({
-              ...point,
-              date: formatDateFromTimestamp(point.timestamp),
-            }),
-          ),
+        const calculatedSegments = buildDailyTrendSegments(bars);
+        const points = mapTrendSegmentsToTimeCells(
+          calculatedSegments,
           startDate,
           matrix,
         );
         if (cancelled) return;
         setTimeTradingCalendar(tradingCalendar);
         setTimeTurningPoints(points);
+        setTrendSegments(calculatedSegments);
         setBridgeInfo({
           symbol: selectedTimeSymbol.ticker,
           symbolName: selectedTimeSymbol.name,
@@ -726,7 +692,7 @@ function SquareNineChart() {
     return () => {
       cancelled = true;
     };
-  }, [matrix, matrixMode, selectedTimeSymbol, startDate, turningThreshold]);
+  }, [matrix, matrixMode, selectedTimeSymbol, startDate]);
 
   useEffect(() => {
     if (matrixMode === "time") setValidationOpen(true);
@@ -794,10 +760,8 @@ function SquareNineChart() {
       dimUsClosedDays,
       selectedTurningKind: bridgeTurningKind,
       turningKindByKey,
-      bestDiagonalLines,
     });
   }, [
-    bestDiagonalLines,
     bridgeTurningKind,
     canvasSize,
     cells,
@@ -982,40 +946,6 @@ function SquareNineChart() {
 
                 {matrixMode === "time" && (
                   <Col span={24}>
-                    <Control title="转折阈值">
-                      <div className="flex flex-col gap-2">
-                        <InputNumber
-                          className="w-full"
-                          min={0.5}
-                          max={8}
-                          step={0.1}
-                          value={turningThreshold}
-                          onChange={(value) => {
-                            if (typeof value === "number") {
-                              setTurningThreshold(
-                                normalizeTurningThreshold(value),
-                              );
-                            }
-                          }}
-                        />
-                        <Slider
-                          min={0.5}
-                          max={8}
-                          step={0.1}
-                          value={turningThreshold}
-                          onChange={(value) =>
-                            setTurningThreshold(
-                              normalizeTurningThreshold(value),
-                            )
-                          }
-                        />
-                      </div>
-                    </Control>
-                  </Col>
-                )}
-
-                {matrixMode === "time" && (
-                  <Col span={24}>
                     <Checkbox
                       checked={dimUsClosedDays}
                       onChange={(event) =>
@@ -1143,75 +1073,6 @@ function SquareNineChart() {
               </Row>
             </Card>
 
-            {matrixMode === "time" && (
-              <Card
-                size="small"
-                title="映射信息"
-                extra={
-                  <Button
-                    size="small"
-                    type="text"
-                    onClick={() => setMappingInfoOpen((open) => !open)}
-                  >
-                    {mappingInfoOpen ? <UpOutlined /> : <DownOutlined />}
-                  </Button>
-                }
-                styles={{
-                  body: {
-                    maxHeight: mappingInfoOpen ? undefined : 0,
-                    opacity: mappingInfoOpen ? 1 : 0,
-                    overflow: "hidden",
-                    padding: mappingInfoOpen ? 12 : 0,
-                    transition:
-                      "max-height 300ms ease, opacity 180ms ease, padding 300ms ease",
-                  },
-                }}
-              >
-                <div className="flex flex-col gap-3">
-                  <Control title="转折点个数">
-                    <div className="flex flex-col gap-2">
-                      <InputNumber
-                        className="w-full"
-                        min={MIN_DIAGONAL_MIN_HIT_COUNT}
-                        max={MAX_DIAGONAL_MIN_HIT_COUNT}
-                        precision={0}
-                        step={1}
-                        value={diagonalMinHitCount}
-                        onChange={(value) =>
-                          setDiagonalMinHitCount(
-                            normalizeDiagonalMinHitCount(value),
-                          )
-                        }
-                      />
-                      <Slider
-                        min={MIN_DIAGONAL_MIN_HIT_COUNT}
-                        max={MAX_DIAGONAL_MIN_HIT_COUNT}
-                        step={1}
-                        value={diagonalMinHitCount}
-                        onChange={(value) =>
-                          setDiagonalMinHitCount(
-                            normalizeDiagonalMinHitCount(value),
-                          )
-                        }
-                      />
-                    </div>
-                  </Control>
-                  <TimeMappingSummary
-                    symbol={selectedTimeSymbol}
-                    bridgeInfo={bridgeInfo}
-                    loading={turningMapLoading}
-                    bestDiagonalLines={bestDiagonalLines}
-                    onAnchorSelect={(candidate) => {
-                      setSelectedValue(candidate.value);
-                      setSearchValue(candidate.value);
-                      setSearchDate(candidate.date);
-                      setBridgeTurningKind(null);
-                    }}
-                  />
-                </div>
-              </Card>
-            )}
-
             <Card
               size="small"
               title={matrixMode === "time" ? "标的列表" : "验证点位"}
@@ -1252,6 +1113,8 @@ function SquareNineChart() {
                     onKeywordChange={setWatchKeyword}
                     onSelect={(symbol) => {
                       setSelectedTimeSymbolTicker(symbol.ticker);
+                      setTrendSegments([]);
+                      setTimeTurningPoints([]);
                       setBridgeTurningKind(null);
                       setBridgeInfo({
                         symbol: symbol.ticker,
@@ -1394,82 +1257,6 @@ function PointArray({
   );
 }
 
-function TimeMappingSummary({
-  symbol,
-  bridgeInfo,
-  loading,
-  bestDiagonalLines,
-  onAnchorSelect,
-}: {
-  symbol: WatchSymbol | null;
-  bridgeInfo: {
-    symbol?: string;
-    symbolName?: string;
-    turningKind?: "high" | "low";
-    date?: string;
-  } | null;
-  loading: boolean;
-  bestDiagonalLines: DiagonalHitLine[];
-  onAnchorSelect: (line: DiagonalHitLine) => void;
-}) {
-  const bestHitCount = bestDiagonalLines[0]?.hitCount ?? 0;
-  const symbolText =
-    symbol?.ticker ??
-    bridgeInfo?.symbol ??
-    (loading ? "加载中..." : "未选择标的");
-  const symbolName = symbol?.name ?? bridgeInfo?.symbolName ?? "";
-
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-        <div className="text-sm font-semibold text-slate-800">
-          {symbolText}
-          {symbolName ? ` · ${symbolName}` : ""}
-        </div>
-        {bridgeInfo?.date && (
-          <div className="mt-1 text-xs text-slate-600">
-            {bridgeInfo.turningKind === "high" ? "高点" : "低点"} ·{" "}
-            {bridgeInfo.date}
-          </div>
-        )}
-      </div>
-
-      {bestHitCount > 0 && (
-        <div className="rounded-md border border-red-200 bg-red-50/70 p-2">
-          <div className="mb-1 flex items-center justify-between text-xs font-semibold text-red-700">
-            <span>主要对角线</span>
-            <span>最高命中 {bestHitCount}</span>
-          </div>
-          <div className="flex max-h-20 flex-wrap gap-1 overflow-auto">
-            {bestDiagonalLines.map((line) => {
-              const firstPoint = line.points[0];
-              if (!firstPoint) return null;
-              const lastPoint = line.points.at(-1) ?? firstPoint;
-              const dateRange =
-                firstPoint.date === lastPoint.date
-                  ? firstPoint.date
-                  : `${firstPoint.date}~${lastPoint.date}`;
-              return (
-                <button
-                  key={line.key}
-                  type="button"
-                  onClick={() => onAnchorSelect(line)}
-                  className="rounded border border-red-200 bg-white px-2 py-1 text-left text-xs text-red-700 transition-colors hover:border-red-400 hover:bg-red-100"
-                >
-                  <span className="font-semibold">{dateRange}</span>
-                  <span className="ml-1 text-red-500">
-                    高{line.highCount}/低{line.lowCount}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function TimeSymbolPanel({
   symbols,
   keyword,
@@ -1551,7 +1338,6 @@ function drawChart({
   dimUsClosedDays,
   selectedTurningKind,
   turningKindByKey,
-  bestDiagonalLines,
 }: {
   canvas: HTMLCanvasElement;
   width: number;
@@ -1569,7 +1355,6 @@ function drawChart({
   dimUsClosedDays: boolean;
   selectedTurningKind: "high" | "low" | null;
   turningKindByKey: Map<string, "high" | "low">;
-  bestDiagonalLines: DiagonalHitLine[];
 }) {
   const ratio = window.devicePixelRatio || 1;
   canvas.width = Math.max(1, Math.floor(width * ratio));
@@ -1601,10 +1386,7 @@ function drawChart({
     turningKindByKey,
   );
   paintCenterGuides(ctx, metrics, guides);
-  if (matrixMode === "time") {
-    paintBestDiagonalLines(ctx, metrics, bestDiagonalLines);
-    paintSelectedTimeDiagonals(ctx, cells, metrics, selectedKey);
-  }
+  if (matrixMode === "time") paintSelectedTimeDiagonals(ctx, cells, metrics, selectedKey);
   paintNumbers(
     ctx,
     cells,
@@ -1823,7 +1605,7 @@ function paintNumbers(
   ctx.restore();
 }
 
-function paintBestDiagonalLines(
+export function paintBestDiagonalLines(
   ctx: CanvasRenderingContext2D,
   metrics: CanvasMetrics,
   lines: DiagonalHitLine[],
@@ -1991,9 +1773,7 @@ function readSquareNineState(): StoredSquareNineState {
       bridgeInfo: parsed.bridgeInfo ?? null,
       selectedTimeSymbolTicker: parsed.selectedTimeSymbolTicker,
       dimUsClosedDays: parsed.dimUsClosedDays ?? true,
-      diagonalMinHitCount: normalizeDiagonalMinHitCount(
-        parsed.diagonalMinHitCount,
-      ),
+      trendSegments: parsed.trendSegments ?? [],
     };
   } catch {
     return {};
@@ -2058,9 +1838,7 @@ async function fetchDailyMarketBars(ticker: string) {
 
 function createTradingCalendar(bars: MarketBar[]): TradingCalendar {
   const keys = new Set(
-    bars
-      .map((bar) => formatDateFromTimestamp(bar.timestamp))
-      .filter(Boolean),
+    bars.map((bar) => formatDateFromTimestamp(bar.timestamp)).filter(Boolean),
   );
   const sortedKeys = Array.from(keys).sort();
   return {
@@ -2070,29 +1848,38 @@ function createTradingCalendar(bars: MarketBar[]): TradingCalendar {
   };
 }
 
-function mapTurningPointsToTimeCells(
-  points: TimeTurningPoint[],
+function mapTrendSegmentsToTimeCells(
+  segments: GannTrendSegment[],
   startDate: string,
   matrix: number[][],
 ) {
   const baseDate = parseDateInput(startDate);
-  if (!baseDate) return points;
+  if (!baseDate) return [];
   const maxValue = matrix.length * matrix.length;
   const keyByValue = new Map<number, string>();
   matrix.forEach((row, r) =>
     row.forEach((value, c) => keyByValue.set(value, `${r}:${c}`)),
   );
 
-  return points.map((point) => {
-    const date = parseDateInput(point.date);
-    if (!date) return point;
+  return segments.map((segment, index): TimeTurningPoint | null => {
+    const date = parseDateInput(segment.startDate);
+    if (!date) return null;
     const value = diffCalendarDays(baseDate, date) + 1;
-    if (value < 1 || value > maxValue) return { ...point, cellKey: undefined };
-    return { ...point, cellKey: keyByValue.get(value) };
-  });
+    if (value < 1 || value > maxValue) return null;
+    const kind = segment.direction === "up" ? "low" : "high";
+    return {
+      kind,
+      timestamp: date.getTime(),
+      value: segment.startPrice,
+      index,
+      key: `${kind}:${segment.startDate}:${segment.startPrice}`,
+      date: segment.startDate,
+      cellKey: keyByValue.get(value),
+    } satisfies TimeTurningPoint;
+  }).filter((point): point is TimeTurningPoint => point !== null);
 }
 
-function calculateBestDiagonalHitLines(
+export function calculateBestDiagonalHitLines(
   cells: Cell[],
   points: TimeTurningPoint[],
   startDate: string,
@@ -2221,20 +2008,14 @@ function addNearbyDiagonalGroups(
   ];
 
   rawLineKeys.forEach(({ slope, intercept }) => {
-    for (
-      let offset = -tolerance;
-      offset <= tolerance;
-      offset += 1
-    ) {
+    for (let offset = -tolerance; offset <= tolerance; offset += 1) {
       const nearbyIntercept = intercept + offset;
       const key = `${slope}:${nearbyIntercept}`;
-      const group =
-        groups.get(key) ??
-        {
-          slope,
-          intercept: nearbyIntercept,
-          points: new Map<string, DiagonalHitLinePoint>(),
-        };
+      const group = groups.get(key) ?? {
+        slope,
+        intercept: nearbyIntercept,
+        points: new Map<string, DiagonalHitLinePoint>(),
+      };
       group.points.set(point.key, {
         ...point,
         adjustedCell,

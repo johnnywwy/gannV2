@@ -15,12 +15,23 @@ export type TurningPoint = {
   key: string;
 };
 
+export type DailyTrendSegment = {
+  startDate: string;
+  endDate: string;
+  startTimestamp: number;
+  endTimestamp: number;
+  startPrice: number;
+  endPrice: number;
+  direction: "up" | "down";
+};
+
 export const DEFAULT_TURNING_THRESHOLD = 1.8;
 export const TURNING_THRESHOLD_EVENT = "gann-turning-threshold-change";
 
 export function calculateMajorTurningPoints(
   bars: TurningPointBar[],
   threshold: number,
+  maxPoints = 36,
 ): TurningPoint[] {
   if (bars.length < 30) return [];
 
@@ -30,17 +41,8 @@ export function calculateMajorTurningPoints(
   const validLows = lows.filter(Number.isFinite);
   if (validHighs.length === 0 || validLows.length === 0) return [];
 
-  const highest = Math.max(...validHighs);
-  const lowest = Math.min(...validLows);
-  const range = highest - lowest;
-  if (!Number.isFinite(range) || range <= 0) return [];
-
   const pivotWindow = clamp(Math.floor(bars.length / 90), 5, 18);
   const normalizedThreshold = clamp(threshold, 0.5, 8);
-  const minMove = Math.max(
-    range * (normalizedThreshold / 100),
-    calculateAverageTrueRange(bars, 14) * normalizedThreshold,
-  );
   const candidates: TurningPoint[] = [];
 
   for (let index = pivotWindow; index < bars.length - pivotWindow; index += 1) {
@@ -83,7 +85,34 @@ export function calculateMajorTurningPoints(
     }
   }
 
-  return compressTurningPoints(candidates, minMove, pivotWindow).slice(-36);
+  const points = compressTurningPoints(
+    candidates,
+    normalizedThreshold,
+    pivotWindow,
+    bars,
+    pivotWindow + Math.ceil(2 * Math.sqrt(pivotWindow)),
+  );
+  return maxPoints > 0 ? points.slice(-maxPoints) : points;
+}
+
+export function buildDailyTrendSegments(
+  bars: TurningPointBar[],
+): DailyTrendSegment[] {
+  const pivots = calculateMajorTurningPoints(bars, 3.5, 0);
+  if (pivots.length < 2) return [];
+
+  return pivots.slice(0, -1).map((pivot, index) => {
+    const next = pivots[index + 1];
+    return {
+      startDate: formatDateFromTimestamp(pivot.timestamp),
+      endDate: formatDateFromTimestamp(next.timestamp),
+      startTimestamp: pivot.timestamp,
+      endTimestamp: next.timestamp,
+      startPrice: pivot.value,
+      endPrice: next.value,
+      direction: next.value >= pivot.value ? "up" : "down",
+    };
+  });
 }
 
 export function formatDateFromTimestamp(timestamp: number) {
@@ -132,8 +161,10 @@ export function saveTurningThreshold(value: unknown) {
 
 function compressTurningPoints(
   candidates: TurningPoint[],
-  minMove: number,
-  pivotWindow: number,
+  thresholdPct: number,
+  _pivotWindow: number,
+  bars: TurningPointBar[],
+  minimumBarsBetween: number,
 ) {
   const points: TurningPoint[] = [];
   candidates
@@ -154,9 +185,22 @@ function compressTurningPoints(
         return;
       }
 
-      const hasEnoughMove = Math.abs(candidate.value - last.value) >= minMove;
-      const hasEnoughDistance = candidate.index - last.index >= pivotWindow * 2;
-      if (hasEnoughMove || hasEnoughDistance) {
+      const referencePrice = Math.max(
+        0.0001,
+        Math.min(Math.abs(candidate.value), Math.abs(last.value)),
+      );
+      const percentMove = referencePrice * (thresholdPct / 100);
+      const localAtr = calculateLocalAverageTrueRange(
+        bars,
+        Math.round((candidate.index + last.index) / 2),
+        14,
+      );
+      const hasEnoughMove =
+        Math.abs(candidate.value - last.value) >=
+        Math.max(percentMove, localAtr);
+      const hasEnoughDistance =
+        candidate.index - last.index >= minimumBarsBetween;
+      if (hasEnoughMove && hasEnoughDistance) {
         points.push(candidate);
       }
     });
@@ -164,25 +208,31 @@ function compressTurningPoints(
   return points;
 }
 
-function calculateAverageTrueRange(bars: TurningPointBar[], period: number) {
-  const trueRanges: number[] = [];
-  for (let index = 1; index < bars.length; index += 1) {
+function calculateLocalAverageTrueRange(
+  bars: TurningPointBar[],
+  centerIndex: number,
+  period: number,
+) {
+  const start = Math.max(1, centerIndex - period);
+  const end = Math.min(bars.length - 1, centerIndex + period);
+  const ranges: number[] = [];
+
+  for (let index = start; index <= end; index += 1) {
     const high = Number(bars[index].high);
     const low = Number(bars[index].low);
-    const prevClose = Number(bars[index - 1].close);
-    if (![high, low, prevClose].every(Number.isFinite)) continue;
-    trueRanges.push(
+    const previousClose = Number(bars[index - 1].close);
+    if (![high, low, previousClose].every(Number.isFinite)) continue;
+    ranges.push(
       Math.max(
         high - low,
-        Math.abs(high - prevClose),
-        Math.abs(low - prevClose),
+        Math.abs(high - previousClose),
+        Math.abs(low - previousClose),
       ),
     );
   }
 
-  const recent = trueRanges.slice(-period * 3);
-  if (recent.length === 0) return 0;
-  return recent.reduce((sum, value) => sum + value, 0) / recent.length;
+  if (ranges.length === 0) return 0;
+  return ranges.reduce((sum, value) => sum + value, 0) / ranges.length;
 }
 
 function clamp(value: number, min: number, max: number) {
