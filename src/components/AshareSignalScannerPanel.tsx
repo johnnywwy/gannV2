@@ -46,11 +46,17 @@ type ScanResult = {
   startedAt: string;
   completedAt: string;
   signalDate?: string | null;
+  weeklySignalDate?: string | null;
   universeCount: number;
   scannedCount: number;
   successCount: number;
   failedCount: number;
   groups: {
+    ntp: SignalGroup;
+    lmacd: SignalGroup;
+    confluence: SignalGroup;
+  };
+  weeklyGroups: {
     ntp: SignalGroup;
     lmacd: SignalGroup;
     confluence: SignalGroup;
@@ -69,6 +75,9 @@ type ScanRun = {
   ntpCount: number;
   lmacdCount: number;
   confluenceCount: number;
+  weeklyNtpCount: number;
+  weeklyLmacdCount: number;
+  weeklyConfluenceCount: number;
   currentSymbol?: string | null;
   message?: string | null;
   progress: number;
@@ -186,7 +195,14 @@ export default function AshareSignalScannerPanel() {
   );
 
   const tabItems = result
-    ? [result.groups.ntp, result.groups.lmacd, result.groups.confluence].map((group) => ({
+    ? [
+        result.groups.ntp,
+        result.groups.lmacd,
+        result.groups.confluence,
+        result.weeklyGroups.ntp,
+        result.weeklyGroups.lmacd,
+        result.weeklyGroups.confluence,
+      ].map((group) => ({
         key: group.id,
         label: `${group.name} (${group.count})`,
         children: (
@@ -223,7 +239,7 @@ export default function AshareSignalScannerPanel() {
         title={
           <Space>
             <StockOutlined className="text-red-500" />
-            <span>全 A 股 · NTP / LMACD / 共振收盘信号</span>
+            <span>全 A 股 · 日线 / 周线信号</span>
           </Space>
         }
         extra={
@@ -245,7 +261,7 @@ export default function AshareSignalScannerPanel() {
       >
         <div className="space-y-4">
           <Typography.Text type="secondary">
-            每个工作日北京时间 15:30 后自动更新。扫描沪深普通 A 股最近 1000 根前复权日线；LMACD 只统计最新交易日刚触发的“底部买入”。
+            每个工作日北京时间 15:30 后自动更新。日线使用最新收盘 K 线；周线只使用已经收盘的完整周 K，周五 15:00 后才纳入本周。LMACD 只统计刚触发的“底部买入”。
           </Typography.Text>
 
           {error && <Alert type="error" showIcon message={error} />}
@@ -260,6 +276,7 @@ export default function AshareSignalScannerPanel() {
                   <Progress percent={run.progress} status="active" />
                   <div className="text-xs text-slate-500">
                     已处理 {run.processed} / {run.total}，失败 {run.failedCount}；当前发现 NTP {run.ntpCount}、LMACD {run.lmacdCount}、共振 {run.confluenceCount}
+                    ；周线 NTP {run.weeklyNtpCount}、LMACD {run.weeklyLmacdCount}、共振 {run.weeklyConfluenceCount}
                   </div>
                 </div>
               }
@@ -278,9 +295,13 @@ export default function AshareSignalScannerPanel() {
                 <Col xs={12} md={6}><Card size="small"><Statistic title="NTP 买入" value={result.groups.ntp.count} valueStyle={{ color: "#dc2626" }} /></Card></Col>
                 <Col xs={12} md={6}><Card size="small"><Statistic title="LMACD 底部买入" value={result.groups.lmacd.count} valueStyle={{ color: "#d97706" }} /></Card></Col>
                 <Col xs={12} md={6}><Card size="small"><Statistic title="NTP+LMACD 共振" value={result.groups.confluence.count} valueStyle={{ color: "#7c3aed" }} /></Card></Col>
+                <Col xs={12} md={6}><Card size="small"><Statistic title="周线 NTP" value={result.weeklyGroups.ntp.count} valueStyle={{ color: "#2563eb" }} /></Card></Col>
+                <Col xs={12} md={6}><Card size="small"><Statistic title="周线 LMACD" value={result.weeklyGroups.lmacd.count} valueStyle={{ color: "#0891b2" }} /></Card></Col>
+                <Col xs={12} md={6}><Card size="small"><Statistic title="周线共振" value={result.weeklyGroups.confluence.count} valueStyle={{ color: "#059669" }} /></Card></Col>
               </Row>
               <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-500">
                 <span>信号交易日：{formatDate(result.signalDate)}</span>
+                <span>周线截止日：{formatDate(result.weeklySignalDate)}</span>
                 <span>完成时间：{formatDateTime(result.completedAt)}</span>
                 <span>成功率：{result.scannedCount ? ((result.successCount / result.scannedCount) * 100).toFixed(1) : "0.0"}%</span>
               </div>
