@@ -218,7 +218,7 @@ export default function AshareSignalScannerPanel() {
     >
       <div className="space-y-4">
         <Typography.Text type="secondary">
-          每个工作日北京时间 15:30 后自动更新。扫描沪深普通 A 股最近 180 根前复权日线，只统计最新交易日刚触发的信号。
+          每个工作日北京时间 15:30 后自动更新。扫描沪深普通 A 股最近 1000 根前复权日线；LMACD 只统计最新交易日刚触发的“底部买入”。
         </Typography.Text>
 
         {error && <Alert type="error" showIcon message={error} />}
