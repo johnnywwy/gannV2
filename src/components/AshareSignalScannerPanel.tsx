@@ -52,6 +52,7 @@ type ScanResult = {
   groups: {
     ntp: SignalGroup;
     lmacd: SignalGroup;
+    confluence: SignalGroup;
   };
   errors?: Array<{ symbol: string; message: string }>;
 };
@@ -66,6 +67,7 @@ type ScanRun = {
   failedCount: number;
   ntpCount: number;
   lmacdCount: number;
+  confluenceCount: number;
   currentSymbol?: string | null;
   message?: string | null;
   progress: number;
@@ -183,7 +185,7 @@ export default function AshareSignalScannerPanel() {
   );
 
   const tabItems = result
-    ? [result.groups.ntp, result.groups.lmacd].map((group) => ({
+    ? [result.groups.ntp, result.groups.lmacd, result.groups.confluence].map((group) => ({
         key: group.id,
         label: `${group.name} (${group.count})`,
         children: (
@@ -219,7 +221,7 @@ export default function AshareSignalScannerPanel() {
         title={
           <Space>
             <StockOutlined className="text-red-500" />
-            <span>全 A 股 · NTP / LMACD 收盘信号</span>
+            <span>全 A 股 · NTP / LMACD / 共振收盘信号</span>
           </Space>
         }
         extra={
@@ -255,7 +257,7 @@ export default function AshareSignalScannerPanel() {
                 <div className="mt-2">
                   <Progress percent={run.progress} status="active" />
                   <div className="text-xs text-slate-500">
-                    已处理 {run.processed} / {run.total}，失败 {run.failedCount}；当前发现 NTP {run.ntpCount}、LMACD {run.lmacdCount}
+                    已处理 {run.processed} / {run.total}，失败 {run.failedCount}；当前发现 NTP {run.ntpCount}、LMACD {run.lmacdCount}、共振 {run.confluenceCount}
                   </div>
                 </div>
               }
@@ -273,6 +275,7 @@ export default function AshareSignalScannerPanel() {
                 <Col xs={12} md={6}><Card size="small"><Statistic title="成功扫描" value={result.successCount} suffix={result.failedCount ? `/ 失败 ${result.failedCount}` : ""} /></Card></Col>
                 <Col xs={12} md={6}><Card size="small"><Statistic title="NTP 买入" value={result.groups.ntp.count} valueStyle={{ color: "#dc2626" }} /></Card></Col>
                 <Col xs={12} md={6}><Card size="small"><Statistic title="LMACD 底部买入" value={result.groups.lmacd.count} valueStyle={{ color: "#d97706" }} /></Card></Col>
+                <Col xs={12} md={6}><Card size="small"><Statistic title="NTP+LMACD 共振" value={result.groups.confluence.count} valueStyle={{ color: "#7c3aed" }} /></Card></Col>
               </Row>
               <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-500">
                 <span>信号交易日：{formatDate(result.signalDate)}</span>

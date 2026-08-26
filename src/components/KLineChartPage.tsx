@@ -217,6 +217,7 @@ const visibleStockCategoryValues = new Set([
   "hk",
   "ntpSignals",
   "lmacdSignals",
+  "confluenceSignals",
 ]);
 const stockCategoryOptions = [
   { label: "美股", value: "us" },
@@ -224,6 +225,7 @@ const stockCategoryOptions = [
   { label: "港股", value: "hk" },
   { label: "NTP", value: "ntpSignals" },
   { label: "LMACD", value: "lmacdSignals" },
+  { label: "共振", value: "confluenceSignals" },
   { label: "期权", value: "usOptions" },
   { label: "其他", value: "other" },
 ];
@@ -1879,7 +1881,8 @@ function WatchlistCard({
       (option) =>
         option.count > 0 ||
         option.value === "ntpSignals" ||
-        option.value === "lmacdSignals",
+        option.value === "lmacdSignals" ||
+        option.value === "confluenceSignals",
     );
   const selectedCategory = visibleCategoryOptions.some(
     (option) => option.value === activeCategory,
@@ -2216,7 +2219,10 @@ function normalizeWatchSymbol(raw: Record<string, unknown>): WatchSymbol | null 
     watchedPrice,
     groupId: normalizeGroupId(raw.groupId ?? raw.group_id),
     groupName: getStringValue(raw.groupName ?? raw.group_name),
-    isSignalGroup: category === "ntpSignals" || category === "lmacdSignals",
+    isSignalGroup:
+      category === "ntpSignals" ||
+      category === "lmacdSignals" ||
+      category === "confluenceSignals",
     pricePrecision: Number(raw.pricePrecision ?? 2),
     volumePrecision: Number(raw.volumePrecision ?? 2),
   };
