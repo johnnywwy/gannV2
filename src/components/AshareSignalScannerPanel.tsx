@@ -1,4 +1,4 @@
-import { PlayCircleOutlined, ReloadOutlined, StockOutlined } from "@ant-design/icons";
+import { CopyOutlined, PlayCircleOutlined, ReloadOutlined, StockOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
@@ -12,6 +12,7 @@ import {
   Tabs,
   Tag,
   Typography,
+  message,
 } from "antd";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { saveKLineActiveSymbol } from "../utils/kLineStore";
@@ -76,6 +77,7 @@ type ScanSnapshot = {
 };
 
 export default function AshareSignalScannerPanel() {
+  const [messageApi, contextHolder] = message.useMessage();
   const [snapshot, setSnapshot] = useState<ScanSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
@@ -122,6 +124,16 @@ export default function AshareSignalScannerPanel() {
   const result = snapshot?.result ?? null;
   const run = snapshot?.run;
   const running = run?.status === "running";
+
+  const copyGroupTable = async (group: SignalGroup) => {
+    try {
+      await writeClipboardText(buildGroupClipboardText(group));
+      messageApi.success(`已复制 ${group.count} 只标的的代码和名称`);
+    } catch {
+      messageApi.error("复制失败，请检查浏览器剪贴板权限");
+    }
+  };
+
   const columns = useMemo(
     () => [
       {
@@ -176,7 +188,16 @@ export default function AshareSignalScannerPanel() {
         label: `${group.name} (${group.count})`,
         children: (
           <div className="space-y-3">
-            <Typography.Text type="secondary">{group.description}</Typography.Text>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <Typography.Text type="secondary">{group.description}</Typography.Text>
+              <Button
+                icon={<CopyOutlined />}
+                disabled={!group.securities.length}
+                onClick={() => void copyGroupTable(group)}
+              >
+                复制整个表格（代码、名称）
+              </Button>
+            </div>
             <Table<SignalSecurity>
               rowKey="symbol"
               size="small"
@@ -192,78 +213,112 @@ export default function AshareSignalScannerPanel() {
     : [];
 
   return (
-    <Card
-      title={
-        <Space>
-          <StockOutlined className="text-red-500" />
-          <span>全 A 股 · NTP / LMACD 收盘信号</span>
-        </Space>
-      }
-      extra={
-        <Space>
-          <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void loadSnapshot()}>
-            刷新结果
-          </Button>
-          <Button
-            type="primary"
-            icon={<PlayCircleOutlined />}
-            loading={starting}
-            disabled={running}
-            onClick={() => void startScan()}
-          >
-            {running ? "扫描中" : "立即扫描"}
-          </Button>
-        </Space>
-      }
-    >
-      <div className="space-y-4">
-        <Typography.Text type="secondary">
-          每个工作日北京时间 15:30 后自动更新。扫描沪深普通 A 股最近 1000 根前复权日线；LMACD 只统计最新交易日刚触发的“底部买入”。
-        </Typography.Text>
+    <>
+      {contextHolder}
+      <Card
+        title={
+          <Space>
+            <StockOutlined className="text-red-500" />
+            <span>全 A 股 · NTP / LMACD 收盘信号</span>
+          </Space>
+        }
+        extra={
+          <Space>
+            <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void loadSnapshot()}>
+              刷新结果
+            </Button>
+            <Button
+              type="primary"
+              icon={<PlayCircleOutlined />}
+              loading={starting}
+              disabled={running}
+              onClick={() => void startScan()}
+            >
+              {running ? "扫描中" : "立即扫描"}
+            </Button>
+          </Space>
+        }
+      >
+        <div className="space-y-4">
+          <Typography.Text type="secondary">
+            每个工作日北京时间 15:30 后自动更新。扫描沪深普通 A 股最近 1000 根前复权日线；LMACD 只统计最新交易日刚触发的“底部买入”。
+          </Typography.Text>
 
-        {error && <Alert type="error" showIcon message={error} />}
+          {error && <Alert type="error" showIcon message={error} />}
 
-        {running && run && (
-          <Alert
-            type="info"
-            showIcon
-            message={`正在扫描 ${run.currentSymbol || "A 股市场"}`}
-            description={
-              <div className="mt-2">
-                <Progress percent={run.progress} status="active" />
-                <div className="text-xs text-slate-500">
-                  已处理 {run.processed} / {run.total}，失败 {run.failedCount}；当前发现 NTP {run.ntpCount}、LMACD {run.lmacdCount}
+          {running && run && (
+            <Alert
+              type="info"
+              showIcon
+              message={`正在扫描 ${run.currentSymbol || "A 股市场"}`}
+              description={
+                <div className="mt-2">
+                  <Progress percent={run.progress} status="active" />
+                  <div className="text-xs text-slate-500">
+                    已处理 {run.processed} / {run.total}，失败 {run.failedCount}；当前发现 NTP {run.ntpCount}、LMACD {run.lmacdCount}
+                  </div>
                 </div>
+              }
+            />
+          )}
+
+          {run?.status === "failed" && (
+            <Alert type="error" showIcon message="最近一次扫描失败" description={run.message} />
+          )}
+
+          {result ? (
+            <>
+              <Row gutter={[12, 12]}>
+                <Col xs={12} md={6}><Card size="small"><Statistic title="A 股标的" value={result.universeCount} /></Card></Col>
+                <Col xs={12} md={6}><Card size="small"><Statistic title="成功扫描" value={result.successCount} suffix={result.failedCount ? `/ 失败 ${result.failedCount}` : ""} /></Card></Col>
+                <Col xs={12} md={6}><Card size="small"><Statistic title="NTP 买入" value={result.groups.ntp.count} valueStyle={{ color: "#dc2626" }} /></Card></Col>
+                <Col xs={12} md={6}><Card size="small"><Statistic title="LMACD 底部买入" value={result.groups.lmacd.count} valueStyle={{ color: "#d97706" }} /></Card></Col>
+              </Row>
+              <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-500">
+                <span>信号交易日：{formatDate(result.signalDate)}</span>
+                <span>完成时间：{formatDateTime(result.completedAt)}</span>
+                <span>成功率：{result.scannedCount ? ((result.successCount / result.scannedCount) * 100).toFixed(1) : "0.0"}%</span>
               </div>
-            }
-          />
-        )}
-
-        {run?.status === "failed" && (
-          <Alert type="error" showIcon message="最近一次扫描失败" description={run.message} />
-        )}
-
-        {result ? (
-          <>
-            <Row gutter={[12, 12]}>
-              <Col xs={12} md={6}><Card size="small"><Statistic title="A 股标的" value={result.universeCount} /></Card></Col>
-              <Col xs={12} md={6}><Card size="small"><Statistic title="成功扫描" value={result.successCount} suffix={result.failedCount ? `/ 失败 ${result.failedCount}` : ""} /></Card></Col>
-              <Col xs={12} md={6}><Card size="small"><Statistic title="NTP 买入" value={result.groups.ntp.count} valueStyle={{ color: "#dc2626" }} /></Card></Col>
-              <Col xs={12} md={6}><Card size="small"><Statistic title="LMACD 底部买入" value={result.groups.lmacd.count} valueStyle={{ color: "#d97706" }} /></Card></Col>
-            </Row>
-            <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-500">
-              <span>信号交易日：{formatDate(result.signalDate)}</span>
-              <span>完成时间：{formatDateTime(result.completedAt)}</span>
-              <span>成功率：{result.scannedCount ? ((result.successCount / result.scannedCount) * 100).toFixed(1) : "0.0"}%</span>
-            </div>
-            <Tabs items={tabItems} />
-          </>
-        ) : (
-          !loading && <Alert type="warning" showIcon message="还没有扫描结果，请点击“立即扫描”生成第一批分组。" />
-        )}
-      </div>
-    </Card>
+              <Tabs items={tabItems} />
+            </>
+          ) : (
+            !loading && <Alert type="warning" showIcon message="还没有扫描结果，请点击“立即扫描”生成第一批分组。" />
+          )}
+        </div>
+      </Card>
+    </>
   );
+}
+
+function buildGroupClipboardText(group: SignalGroup) {
+  const rows = group.securities.map((security) => [
+    security.symbol.split(".")[0],
+    security.nameCn || security.name || "",
+  ]);
+
+  return [["代码", "名称"], ...rows]
+    .map((row) => row.join("\t"))
+    .join("\n");
+}
+
+async function writeClipboardText(text: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+
+  try {
+    if (!document.execCommand("copy")) throw new Error("Copy command failed");
+  } finally {
+    textarea.remove();
+  }
 }
 
 function formatDate(value?: string | null) {
