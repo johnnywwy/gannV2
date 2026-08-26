@@ -11,6 +11,7 @@ import {
   Table,
   Tabs,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from "antd";
@@ -152,7 +153,7 @@ export default function AshareSignalScannerPanel() {
               window.location.hash = "/kline";
             }}
           >
-            {symbol}
+            {symbol.split(".")[0]}
           </Button>
         ),
       },
@@ -192,13 +193,14 @@ export default function AshareSignalScannerPanel() {
           <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <Typography.Text type="secondary">{group.description}</Typography.Text>
-              <Button
-                icon={<CopyOutlined />}
-                disabled={!group.securities.length}
-                onClick={() => void copyGroupTable(group)}
-              >
-                复制整个表格（代码、名称）
-              </Button>
+              <Tooltip title="复制全部代码和名称">
+                <Button
+                  aria-label={`复制${group.name}全部代码和名称`}
+                  icon={<CopyOutlined />}
+                  disabled={!group.securities.length}
+                  onClick={() => void copyGroupTable(group)}
+                />
+              </Tooltip>
             </div>
             <Table<SignalSecurity>
               rowKey="symbol"
