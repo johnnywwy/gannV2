@@ -61,11 +61,6 @@ import {
 } from "../utils/gannBridge";
 import { readKLineActiveSymbol, saveKLineActiveSymbol } from "../utils/kLineStore";
 import {
-  calculateLmacdFormulaSignals,
-  calculateLmacdFormulaValues,
-  type LmacdFormulaSignalKind,
-} from "../utils/lmacdFormula";
-import {
   findNumberPosition,
   generateGannMatrix,
   getTrendExtensionPoints,
@@ -122,7 +117,43 @@ type LmacdData = {
   macd?: number;
 };
 
-type LmacdSignalKind = LmacdFormulaSignalKind;
+type LmacdSignalKind =
+  | "bottomBuy"
+  | "topSell"
+  | "bullishDivergence"
+  | "bearishDivergence"
+  | "bottomDisappear"
+  | "topDisappear";
+
+type BackendNtpSignal = {
+  timestamp: number;
+  value: number;
+  text: string;
+  side: "buy" | "sell";
+};
+
+type BackendLmacdSignal = {
+  timestamp: number;
+  value: number;
+  text: string;
+  kind: LmacdSignalKind;
+};
+
+type BackendBarIndicators = {
+  ntpSignals: BackendNtpSignal[];
+  lmacd?: LmacdData;
+  lmacdSignals: BackendLmacdSignal[];
+};
+
+type BackendKLineData = KLineData & {
+  backendIndicators?: BackendBarIndicators;
+};
+
+type BackendIndicatorIndex = {
+  ntpSignals: Map<number, BackendNtpSignal[]>;
+  lmacdValues: Map<number, LmacdData>;
+  lmacdSignals: Map<number, BackendLmacdSignal[]>;
+};
 
 type LmacdSignalData = {
   text: string;
@@ -755,20 +786,13 @@ const lmacdIndicator: IndicatorTemplate<LmacdData, number> = {
       },
     },
   ],
-  calc: (dataList, indicator) =>
-    calculateLmacdValues(dataList, indicator.calcParams),
+  calc: (dataList) =>
+    dataList.map((bar) =>
+      (bar as BackendKLineData).backendIndicators?.lmacd ?? {},
+    ),
 };
 
 registerIndicator(lmacdIndicator);
-
-function calculateLmacdValues(
-  dataList: KLineData[],
-  calcParams: number[] = [12, 26, 9],
-) {
-  return calculateLmacdFormulaValues(dataList, calcParams).map<LmacdData>(
-    ({ diff, dea, macd }) => ({ diff, dea, macd }),
-  );
-}
 
 function KLineChartPage() {
   const [messageApi, contextHolder] = message.useMessage();
@@ -2450,7 +2474,10 @@ function renderNtpSignalOverlays(
   if (!visible || bars.length < 16) return;
 
   const stackSlots = new Map<string, number>();
-  const overlays = calculateNtpSignals(bars).map<OverlayCreate>((signal) => {
+  const signals = bars.flatMap(
+    (bar) => (bar as BackendKLineData).backendIndicators?.ntpSignals ?? [],
+  );
+  const overlays = signals.map<OverlayCreate>((signal) => {
     const stackKey = `${signal.timestamp}:${signal.side}`;
     const slot = stackSlots.get(stackKey) ?? 0;
     stackSlots.set(stackKey, slot + 1);
@@ -2472,69 +2499,6 @@ function renderNtpSignalOverlays(
   if (overlays.length > 0) chart.createOverlay(overlays);
 }
 
-function calculateNtpSignals(bars: KLineData[]) {
-  const result: Array<{
-    timestamp: number;
-    value: number;
-    text: string;
-    side: "buy" | "sell";
-  }> = [];
-  let previousBuy1 = false;
-  let previousBuy2 = false;
-  let previousSell1 = false;
-  let previousSell2 = false;
-
-  for (let index = 0; index < bars.length; index += 1) {
-    const buy1 = isContinuousCloseCompare(bars, index, 9, "lt");
-    const buy2 = isContinuousCloseCompare(bars, index, 12, "lt");
-    const sell1 = isContinuousCloseCompare(bars, index, 9, "gt");
-    const sell2 = isContinuousCloseCompare(bars, index, 12, "gt");
-    const bar = bars[index];
-    const high = Number(bar.high);
-    const low = Number(bar.low);
-
-    if (buy1 && !previousBuy1) {
-      result.push({
-        timestamp: Number(bar.timestamp),
-        value: low,
-        text: "买1",
-        side: "buy",
-      });
-    }
-    if (buy2 && !previousBuy2) {
-      result.push({
-        timestamp: Number(bar.timestamp),
-        value: low,
-        text: "买2",
-        side: "buy",
-      });
-    }
-    if (sell1 && !previousSell1) {
-      result.push({
-        timestamp: Number(bar.timestamp),
-        value: high,
-        text: "卖1",
-        side: "sell",
-      });
-    }
-    if (sell2 && !previousSell2) {
-      result.push({
-        timestamp: Number(bar.timestamp),
-        value: high,
-        text: "卖2",
-        side: "sell",
-      });
-    }
-
-    previousBuy1 = buy1;
-    previousBuy2 = buy2;
-    previousSell1 = sell1;
-    previousSell2 = sell2;
-  }
-
-  return result;
-}
-
 function renderLmacdSignalOverlays(
   chart: Chart,
   bars: KLineData[],
@@ -2544,7 +2508,10 @@ function renderLmacdSignalOverlays(
   if (!visible || bars.length < 40) return;
 
   const stackSlots = new Map<string, number>();
-  const overlays = calculateLmacdSignals(bars).map<OverlayCreate>(
+  const signals = bars.flatMap(
+    (bar) => (bar as BackendKLineData).backendIndicators?.lmacdSignals ?? [],
+  );
+  const overlays = signals.map<OverlayCreate>(
     (signal) => {
       const stackSide =
         signal.kind === "bottomBuy" ||
@@ -2722,29 +2689,6 @@ function groupBarsBySession<T extends { timestamp?: number }>(bars: T[]) {
   return Array.from(sessions.values()).map((sessionBars) =>
     sessionBars.sort((a, b) => Number(a.timestamp) - Number(b.timestamp)),
   );
-}
-
-function calculateLmacdSignals(bars: KLineData[]) {
-  return calculateLmacdFormulaSignals(bars);
-}
-
-function isContinuousCloseCompare(
-  bars: KLineData[],
-  index: number,
-  count: number,
-  direction: "lt" | "gt",
-) {
-  if (index - count - 3 < 0) return false;
-
-  for (let offset = 0; offset < count; offset += 1) {
-    const current = Number(bars[index - offset]?.close);
-    const reference = Number(bars[index - offset - 4]?.close);
-    if (!Number.isFinite(current) || !Number.isFinite(reference)) return false;
-    if (direction === "lt" && current >= reference) return false;
-    if (direction === "gt" && current <= reference) return false;
-  }
-
-  return true;
 }
 
 function renderTrendTurningPoints(
@@ -3019,8 +2963,13 @@ async function fetchMarketBars(
         throw new Error("Market api returned an unexpected payload");
       }
 
+      const indicatorIndex = buildBackendIndicatorIndex(
+        payload?.data?.indicators,
+      );
       const bars = rawBars
-        .map(normalizeApiBar)
+        .map((bar: Record<string, unknown>) =>
+          normalizeApiBar(bar, indicatorIndex),
+        )
         .filter((bar: KLineData | null): bar is KLineData => bar !== null)
         .filter((bar: KLineData) => {
           if (loadType === "forward" && anchorTimestamp)
@@ -3125,7 +3074,80 @@ function getMarketLoadMore(
   return { backward: false, forward: hasMore };
 }
 
-function normalizeApiBar(raw: Record<string, unknown>): KLineData | null {
+function buildBackendIndicatorIndex(value: unknown): BackendIndicatorIndex {
+  const result: BackendIndicatorIndex = {
+    ntpSignals: new Map(),
+    lmacdValues: new Map(),
+    lmacdSignals: new Map(),
+  };
+  const root = asRecord(value);
+  const ntp = asRecord(root?.ntp);
+  const lmacd = asRecord(root?.lmacd);
+
+  asRecordArray(ntp?.signals).forEach((item) => {
+    const timestamp = normalizeBackendIndicatorTimestamp(item.timestamp);
+    const value = Number(item.value);
+    const text = getStringValue(item.text);
+    const side = item.side === "buy" || item.side === "sell" ? item.side : null;
+    if (timestamp === null || !Number.isFinite(value) || !text || !side) return;
+
+    const list = result.ntpSignals.get(timestamp) ?? [];
+    list.push({ timestamp, value, text, side });
+    result.ntpSignals.set(timestamp, list);
+  });
+
+  asRecordArray(lmacd?.values).forEach((item) => {
+    const timestamp = normalizeBackendIndicatorTimestamp(item.timestamp);
+    const diff = Number(item.diff);
+    const dea = Number(item.dea);
+    const macd = Number(item.macd);
+    if (timestamp === null || ![diff, dea, macd].every(Number.isFinite)) return;
+
+    result.lmacdValues.set(timestamp, { diff, dea, macd });
+  });
+
+  asRecordArray(lmacd?.signals).forEach((item) => {
+    const timestamp = normalizeBackendIndicatorTimestamp(item.timestamp);
+    const value = Number(item.value);
+    const text = getStringValue(item.text);
+    const kind = getStringValue(item.kind);
+    if (
+      timestamp === null ||
+      !Number.isFinite(value) ||
+      !text ||
+      !isLmacdSignalKind(kind)
+    ) return;
+
+    const list = result.lmacdSignals.get(timestamp) ?? [];
+    list.push({ timestamp, value, text, kind });
+    result.lmacdSignals.set(timestamp, list);
+  });
+
+  return result;
+}
+
+function normalizeBackendIndicatorTimestamp(value: unknown) {
+  const timestamp = typeof value === "number"
+    ? value
+    : new Date(String(value ?? "")).getTime();
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function isLmacdSignalKind(value: string): value is LmacdSignalKind {
+  return [
+    "bottomBuy",
+    "topSell",
+    "bullishDivergence",
+    "bearishDivergence",
+    "bottomDisappear",
+    "topDisappear",
+  ].includes(value);
+}
+
+function normalizeApiBar(
+  raw: Record<string, unknown>,
+  indicatorIndex: BackendIndicatorIndex,
+): BackendKLineData | null {
   const timestamp = new Date(String(raw.timestamp ?? raw.time)).getTime();
   const open = Number(raw.open);
   const high = Number(raw.high);
@@ -3136,6 +3158,12 @@ function normalizeApiBar(raw: Record<string, unknown>): KLineData | null {
 
   if (![timestamp, open, high, low, close].every(Number.isFinite)) return null;
 
+  const backendIndicators: BackendBarIndicators = {
+    ntpSignals: indicatorIndex.ntpSignals.get(timestamp) ?? [],
+    lmacd: indicatorIndex.lmacdValues.get(timestamp),
+    lmacdSignals: indicatorIndex.lmacdSignals.get(timestamp) ?? [],
+  };
+
   return {
     timestamp,
     open,
@@ -3144,6 +3172,7 @@ function normalizeApiBar(raw: Record<string, unknown>): KLineData | null {
     close,
     volume: Number.isFinite(volume) ? volume : 0,
     turnover: Number.isFinite(turnover) ? turnover : undefined,
+    backendIndicators,
   };
 }
 
