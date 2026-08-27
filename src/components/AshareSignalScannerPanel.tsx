@@ -170,6 +170,7 @@ export default function AshareSignalScannerPanel() {
   const [historyResult, setHistoryResult] = useState<ScanResult | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [performanceDate, setPerformanceDate] = useState("all");
 
   const loadSnapshot = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
@@ -269,6 +270,22 @@ export default function AshareSignalScannerPanel() {
   const performance = snapshot?.performance ?? null;
   const run = snapshot?.run;
   const running = run?.status === "running";
+  const performanceDates = useMemo(
+    () => [...new Set((performance?.records || []).map((item) => item.entryMarketDate))]
+      .filter(Boolean)
+      .sort((left, right) => right.localeCompare(left)),
+    [performance],
+  );
+
+  useEffect(() => {
+    if (!performanceDates.length) return;
+    if (performanceDate !== "all" && performanceDates.includes(performanceDate)) return;
+
+    const latestTrackedDate = performanceDates.find((date) => (
+      performance?.records.some((item) => item.entryMarketDate === date && item.holdingTradingDays > 0)
+    ));
+    setPerformanceDate(latestTrackedDate || performanceDates[0]);
+  }, [performance, performanceDate, performanceDates]);
 
   const copyGroupTable = async (group: SignalGroup) => {
     try {
@@ -474,8 +491,11 @@ export default function AshareSignalScannerPanel() {
 
   const performanceItems = performance
     ? (["ntp", "lmacd", "confluence"] as PerformanceStrategy[]).map((strategy) => {
-        const summary = performance.summary.strategies[strategy];
-        const records = performance.records.filter((item) => item.strategy === strategy);
+        const records = performance.records.filter((item) => (
+          item.strategy === strategy &&
+          (performanceDate === "all" || item.entryMarketDate === performanceDate)
+        ));
+        const summary = summarizePerformanceRecords(records, strategy, performance.updatedAt);
 
         return {
           key: strategy,
@@ -657,9 +677,27 @@ export default function AshareSignalScannerPanel() {
                     className="border-t-4 border-t-blue-500 shadow-sm"
                     title="信号触发后的持续盈亏跟踪"
                   >
-                    <div className="mb-4 text-xs text-slate-500">
-                      每次触发都会按 15:30 收盘扫描价建立一笔独立记录；从下一交易日开始持续更新，不会因为信号消失或自选股变化而删除。
-                      最近更新：{formatDateTime(performance.updatedAt)}
+                    <div className="mb-4 space-y-3">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <Typography.Text strong>查看触发日期</Typography.Text>
+                        <Select
+                          aria-label="选择盈亏跟踪触发日期"
+                          value={performanceDate}
+                          className="min-w-56"
+                          options={[
+                            { value: "all", label: `全部日期 · ${performance.records.length} 笔` },
+                            ...performanceDates.map((date) => ({
+                              value: date,
+                              label: `${date} · ${performance.records.filter((item) => item.entryMarketDate === date).length} 笔`,
+                            })),
+                          ]}
+                          onChange={setPerformanceDate}
+                        />
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        每次触发都会按 15:30 收盘扫描价建立一笔独立记录；从下一交易日开始持续更新，不会因为信号消失或自选股变化而删除。
+                        最近更新：{formatDateTime(performance.updatedAt)}
+                      </div>
                     </div>
                     <Tabs tabPlacement="start" items={performanceItems} />
                   </Card>
@@ -748,4 +786,50 @@ function renderReturnPct(value?: number | null) {
         : "default";
 
   return <Tag color={color}>{formatReturnPct(value)}</Tag>;
+}
+
+function summarizePerformanceRecords(
+  records: PerformanceRecord[],
+  strategy: PerformanceStrategy,
+  updatedAt: string,
+): PerformanceSummary {
+  const returns = records
+    .map((item) => item.currentReturnPct)
+    .filter((value): value is number => value !== null && Number.isFinite(value));
+  const nextDayReturns = records
+    .map((item) => item.nextDayReturnPct)
+    .filter((value): value is number => value !== null && Number.isFinite(value));
+  const profitableCount = returns.filter((value) => value > 0).length;
+  const losingCount = returns.filter((value) => value < 0).length;
+
+  return {
+    strategy,
+    label: records[0]?.strategyLabel || ({
+      ntp: "NTP买入",
+      lmacd: "LMACD底部买入",
+      confluence: "NTP+LMACD共振",
+    } satisfies Record<PerformanceStrategy, string>)[strategy],
+    count: records.length,
+    trackedCount: returns.length,
+    profitableCount,
+    losingCount,
+    flatCount: returns.length - profitableCount - losingCount,
+    winRate: returns.length ? roundPerformanceMetric((profitableCount / returns.length) * 100, 2) : null,
+    averageReturnPct: averageMetric(returns),
+    bestReturnPct: returns.length ? Math.max(...returns) : null,
+    worstReturnPct: returns.length ? Math.min(...returns) : null,
+    nextDayTrackedCount: nextDayReturns.length,
+    averageNextDayReturnPct: averageMetric(nextDayReturns),
+    updatedAt,
+  };
+}
+
+function averageMetric(values: number[]) {
+  return values.length
+    ? roundPerformanceMetric(values.reduce((sum, value) => sum + value, 0) / values.length)
+    : null;
+}
+
+function roundPerformanceMetric(value: number, digits = 4) {
+  return Number(value.toFixed(digits));
 }
