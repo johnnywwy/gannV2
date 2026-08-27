@@ -1,4 +1,4 @@
-import { AppstoreOutlined, BarChartOutlined, ExperimentOutlined, StockOutlined } from '@ant-design/icons'
+import { AppstoreOutlined, ExperimentOutlined, StockOutlined } from '@ant-design/icons'
 import { Button } from 'antd'
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import BacktestComingSoonPage from './components/BacktestComingSoonPage'
@@ -10,7 +10,6 @@ const menuItems = [
   { path: '/', label: '九方图', icon: <AppstoreOutlined /> },
   { path: '/kline', label: 'K线图', icon: <StockOutlined /> },
   { path: '/backtest', label: '回溯测试', icon: <ExperimentOutlined /> },
-  { path: '/statistics', label: '统计', icon: <BarChartOutlined /> },
 ]
 
 function App() {
