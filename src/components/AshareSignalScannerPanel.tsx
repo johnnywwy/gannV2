@@ -4,6 +4,7 @@ import {
   Button,
   Card,
   Col,
+  Divider,
   Progress,
   Row,
   Space,
@@ -502,13 +503,20 @@ export default function AshareSignalScannerPanel() {
               </div>
               <Tabs tabPlacement="start" items={timeframeItems} />
               {performance && (
-                <Card size="small" title="信号触发后的持续盈亏跟踪">
-                  <div className="mb-4 text-xs text-slate-500">
-                    每次触发都会按 15:30 收盘扫描价建立一笔独立记录；从下一交易日开始持续更新，不会因为信号消失或自选股变化而删除。
-                    最近更新：{formatDateTime(performance.updatedAt)}
-                  </div>
-                  <Tabs tabPlacement="start" items={performanceItems} />
-                </Card>
+                <section className="pt-2">
+                  <Divider className="!my-6" />
+                  <Card
+                    size="small"
+                    className="border-t-4 border-t-blue-500 shadow-sm"
+                    title="信号触发后的持续盈亏跟踪"
+                  >
+                    <div className="mb-4 text-xs text-slate-500">
+                      每次触发都会按 15:30 收盘扫描价建立一笔独立记录；从下一交易日开始持续更新，不会因为信号消失或自选股变化而删除。
+                      最近更新：{formatDateTime(performance.updatedAt)}
+                    </div>
+                    <Tabs tabPlacement="start" items={performanceItems} />
+                  </Card>
+                </section>
               )}
             </>
           ) : (
