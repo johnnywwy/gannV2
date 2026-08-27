@@ -1,4 +1,4 @@
-import { CopyOutlined, PlayCircleOutlined, ReloadOutlined, StockOutlined } from "@ant-design/icons";
+import { CopyOutlined, HistoryOutlined, PlayCircleOutlined, ReloadOutlined, StockOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
@@ -7,6 +7,7 @@ import {
   Divider,
   Progress,
   Row,
+  Select,
   Space,
   Statistic,
   Table,
@@ -22,6 +23,7 @@ import { saveKLineActiveSymbol } from "../utils/kLineStore";
 const API_BASE = "https://n1-longbridge.johnnywwy.com/api";
 const SIGNALS_URL = `${API_BASE}/scanner/a-shares/signals`;
 const RUN_URL = `${API_BASE}/scanner/a-shares/run`;
+const HISTORY_URL = `${API_BASE}/scanner/a-shares/history`;
 
 type SignalSecurity = {
   symbol: string;
@@ -63,6 +65,22 @@ type ScanResult = {
     confluence: SignalGroup;
   };
   errors?: Array<{ symbol: string; message: string }>;
+};
+
+type ScanHistorySummary = {
+  date: string;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  successCount: number;
+  failedCount: number;
+  counts: {
+    ntp: number;
+    lmacd: number;
+    confluence: number;
+    weeklyNtp: number;
+    weeklyLmacd: number;
+    weeklyConfluence: number;
+  };
 };
 
 type ScanRun = {
@@ -147,6 +165,11 @@ export default function AshareSignalScannerPanel() {
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [historyIndex, setHistoryIndex] = useState<ScanHistorySummary[]>([]);
+  const [selectedHistoryDate, setSelectedHistoryDate] = useState<string | null>(null);
+  const [historyResult, setHistoryResult] = useState<ScanResult | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
 
   const loadSnapshot = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
@@ -164,11 +187,67 @@ export default function AshareSignalScannerPanel() {
     }
   }, []);
 
+  const loadHistoryIndex = useCallback(async () => {
+    try {
+      const response = await fetch(HISTORY_URL, { cache: "no-store" });
+      if (!response.ok) throw new Error(`历史扫描接口失败：${response.status}`);
+      const payload = await response.json();
+      if (!payload?.success || !Array.isArray(payload?.data)) throw new Error("历史扫描格式不正确");
+      const index = payload.data as ScanHistorySummary[];
+      setHistoryIndex(index);
+      setSelectedHistoryDate((current) => (
+        current && index.some((item) => item.date === current)
+          ? current
+          : index[0]?.date ?? null
+      ));
+      setHistoryError(null);
+    } catch (nextError) {
+      setHistoryError(nextError instanceof Error ? nextError.message : "历史扫描记录加载失败");
+    }
+  }, []);
+
   useEffect(() => {
     void loadSnapshot();
+    void loadHistoryIndex();
     const timer = window.setInterval(() => void loadSnapshot(true), 10_000);
-    return () => window.clearInterval(timer);
-  }, [loadSnapshot]);
+    const historyTimer = window.setInterval(() => void loadHistoryIndex(), 60_000);
+    return () => {
+      window.clearInterval(timer);
+      window.clearInterval(historyTimer);
+    };
+  }, [loadHistoryIndex, loadSnapshot]);
+
+  useEffect(() => {
+    if (!selectedHistoryDate) {
+      setHistoryResult(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    const loadHistoryDate = async () => {
+      setHistoryLoading(true);
+      try {
+        const response = await fetch(`${HISTORY_URL}/${selectedHistoryDate}`, {
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok || !payload?.success || !payload?.data) {
+          throw new Error(payload?.message || `历史扫描详情失败：${response.status}`);
+        }
+        setHistoryResult(payload.data);
+        setHistoryError(null);
+      } catch (nextError) {
+        if (controller.signal.aborted) return;
+        setHistoryError(nextError instanceof Error ? nextError.message : "历史扫描详情加载失败");
+      } finally {
+        if (!controller.signal.aborted) setHistoryLoading(false);
+      }
+    };
+
+    void loadHistoryDate();
+    return () => controller.abort();
+  }, [selectedHistoryDate]);
 
   const startScan = async () => {
     setStarting(true);
@@ -434,6 +513,21 @@ export default function AshareSignalScannerPanel() {
         };
       })
     : [];
+  const selectedHistorySummary = historyIndex.find((item) => item.date === selectedHistoryDate);
+  const historyTimeframeItems = historyResult
+    ? [
+        {
+          key: "history-day",
+          label: "日线",
+          children: buildTimeframePanel(historyResult.groups, historyResult.signalDate, "信号交易日"),
+        },
+        {
+          key: "history-week",
+          label: "周线",
+          children: buildTimeframePanel(historyResult.weeklyGroups, historyResult.weeklySignalDate, "完整周截止日"),
+        },
+      ]
+    : [];
 
   return (
     <>
@@ -447,7 +541,14 @@ export default function AshareSignalScannerPanel() {
         }
         extra={
           <Space>
-            <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void loadSnapshot()}>
+            <Button
+              icon={<ReloadOutlined />}
+              loading={loading}
+              onClick={() => {
+                void loadSnapshot();
+                void loadHistoryIndex();
+              }}
+            >
               刷新结果
             </Button>
             <Button
@@ -502,6 +603,52 @@ export default function AshareSignalScannerPanel() {
                 <span>成功率：{result.scannedCount ? ((result.successCount / result.scannedCount) * 100).toFixed(1) : "0.0"}%</span>
               </div>
               <Tabs tabPlacement="start" items={timeframeItems} />
+              <section className="pt-2">
+                <Divider className="!my-6" />
+                <Card
+                  size="small"
+                  className="border-t-4 border-t-amber-500 shadow-sm"
+                  title={
+                    <Space>
+                      <HistoryOutlined />
+                      <span>历史扫描记录</span>
+                    </Space>
+                  }
+                  extra={
+                    <Select
+                      aria-label="选择历史扫描日期"
+                      value={selectedHistoryDate}
+                      placeholder="选择扫描日期"
+                      className="min-w-64"
+                      loading={historyLoading}
+                      options={historyIndex.map((item) => ({
+                        value: item.date,
+                        label: `${item.date} · NTP ${item.counts.ntp} / LMACD ${item.counts.lmacd} / 共振 ${item.counts.confluence}`,
+                      }))}
+                      onChange={setSelectedHistoryDate}
+                    />
+                  }
+                >
+                  <div className="space-y-4">
+                    <Typography.Text type="secondary">
+                      每天 15:30 的完整扫描名单都会按日期永久保存，可以随时切换日期查看，不受最新扫描结果覆盖。
+                    </Typography.Text>
+                    {historyError && <Alert type="error" showIcon message={historyError} />}
+                    {selectedHistorySummary && (
+                      <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-500">
+                        <span>扫描日期：{selectedHistorySummary.date}</span>
+                        <span>完成时间：{formatDateTime(selectedHistorySummary.completedAt)}</span>
+                        <span>成功 {selectedHistorySummary.successCount} / 失败 {selectedHistorySummary.failedCount}</span>
+                      </div>
+                    )}
+                    {historyResult ? (
+                      <Tabs tabPlacement="start" items={historyTimeframeItems} />
+                    ) : (
+                      !historyLoading && !historyError && <Alert type="info" showIcon message="还没有历史扫描记录" />
+                    )}
+                  </div>
+                </Card>
+              </section>
               {performance && (
                 <section className="pt-2">
                   <Divider className="!my-6" />
