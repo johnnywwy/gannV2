@@ -417,7 +417,7 @@ export default function AshareSignalScannerPanel() {
                 </Col>
               </Row>
               <div className="text-xs text-slate-500">
-                当前盈利 {summary.profitableCount} 笔，亏损 {summary.losingCount} 笔，持平 {summary.flatCount} 笔；每个交易日 14:45 更新一次。
+                当前盈利 {summary.profitableCount} 笔，亏损 {summary.losingCount} 笔，持平 {summary.flatCount} 笔；每个交易日 15:30 更新一次。
               </div>
               <Table<PerformanceRecord>
                 rowKey="id"
@@ -463,7 +463,7 @@ export default function AshareSignalScannerPanel() {
       >
         <div className="space-y-4">
           <Typography.Text type="secondary">
-            每个工作日北京时间 14:45 自动扫描，使用当时最新成交价和盘中日 K 记录信号。周线只使用已经收盘的完整周 K。LMACD 只统计刚触发的“底部买入”。
+            每个工作日北京时间 15:30 自动扫描，使用完整收盘日 K 和收盘扫描价记录信号。周线只使用已经收盘的完整周 K。LMACD 只统计刚触发的“底部买入”。
           </Typography.Text>
 
           {error && <Alert type="error" showIcon message={error} />}
@@ -504,7 +504,7 @@ export default function AshareSignalScannerPanel() {
               {performance && (
                 <Card size="small" title="信号触发后的持续盈亏跟踪">
                   <div className="mb-4 text-xs text-slate-500">
-                    每次触发都会按 14:45 扫描价建立一笔独立记录；从下一交易日开始持续更新，不会因为信号消失或自选股变化而删除。
+                    每次触发都会按 15:30 收盘扫描价建立一笔独立记录；从下一交易日开始持续更新，不会因为信号消失或自选股变化而删除。
                     最近更新：{formatDateTime(performance.updatedAt)}
                   </div>
                   <Tabs tabPlacement="start" items={performanceItems} />
