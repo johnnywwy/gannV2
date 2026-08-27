@@ -85,7 +85,59 @@ type ScanRun = {
 
 type ScanSnapshot = {
   result: ScanResult | null;
+  performance: SignalPerformance | null;
   run: ScanRun;
+};
+
+type PerformanceStrategy = "ntp" | "lmacd" | "confluence";
+
+type PerformanceSummary = {
+  strategy: PerformanceStrategy;
+  label: string;
+  count: number;
+  trackedCount: number;
+  profitableCount: number;
+  losingCount: number;
+  flatCount: number;
+  winRate: number | null;
+  averageReturnPct: number | null;
+  bestReturnPct: number | null;
+  worstReturnPct: number | null;
+  nextDayTrackedCount: number;
+  averageNextDayReturnPct: number | null;
+  updatedAt: string;
+};
+
+type PerformanceRecord = {
+  id: string;
+  strategy: PerformanceStrategy;
+  strategyLabel: string;
+  symbol: string;
+  code: string;
+  name: string;
+  signal: string;
+  signalAt: string;
+  entryPrice: number;
+  entryAt: string;
+  entryMarketDate: string;
+  latestPrice: number;
+  latestPriceAt: string;
+  currentReturnPct: number | null;
+  nextDayReturnPct: number | null;
+  maxReturnPct: number | null;
+  minReturnPct: number | null;
+  holdingTradingDays: number;
+};
+
+type SignalPerformance = {
+  version: number;
+  updatedAt: string;
+  scanTime: string;
+  summary: {
+    totalCount: number;
+    strategies: Record<PerformanceStrategy, PerformanceSummary>;
+  };
+  records: PerformanceRecord[];
 };
 
 export default function AshareSignalScannerPanel() {
@@ -134,6 +186,7 @@ export default function AshareSignalScannerPanel() {
   };
 
   const result = snapshot?.result ?? null;
+  const performance = snapshot?.performance ?? null;
   const run = snapshot?.run;
   const running = run?.status === "running";
 
@@ -178,7 +231,7 @@ export default function AshareSignalScannerPanel() {
         render: (value: string) => <Tag color="red">{value}</Tag>,
       },
       {
-        title: "收盘价",
+        title: "扫描价",
         dataIndex: "latestClose",
         width: 100,
         render: (value: number | string | null) =>
@@ -189,6 +242,76 @@ export default function AshareSignalScannerPanel() {
         dataIndex: "signalAt",
         width: 120,
         render: formatDate,
+      },
+    ],
+    [],
+  );
+
+  const performanceColumns = useMemo(
+    () => [
+      {
+        title: "代码",
+        dataIndex: "symbol",
+        width: 95,
+        render: (symbol: string) => (
+          <Button
+            type="link"
+            size="small"
+            className="!px-0"
+            onClick={() => {
+              saveKLineActiveSymbol({ ticker: symbol });
+              window.location.hash = "/kline";
+            }}
+          >
+            {symbol.split(".")[0]}
+          </Button>
+        ),
+      },
+      { title: "名称", dataIndex: "name", width: 110 },
+      {
+        title: "信号",
+        dataIndex: "signal",
+        width: 165,
+        render: (value: string) => <Tag color="red">{value}</Tag>,
+      },
+      { title: "触发日", dataIndex: "entryMarketDate", width: 110 },
+      {
+        title: "扫描价",
+        dataIndex: "entryPrice",
+        width: 90,
+        render: formatPrice,
+      },
+      {
+        title: "最新价",
+        dataIndex: "latestPrice",
+        width: 90,
+        render: formatPrice,
+      },
+      {
+        title: "累计盈亏",
+        dataIndex: "currentReturnPct",
+        width: 105,
+        render: renderReturnPct,
+      },
+      {
+        title: "次日盈亏",
+        dataIndex: "nextDayReturnPct",
+        width: 105,
+        render: renderReturnPct,
+      },
+      {
+        title: "最高 / 最低",
+        key: "range",
+        width: 150,
+        render: (_: unknown, row: PerformanceRecord) => (
+          <span>{formatReturnPct(row.maxReturnPct)} / {formatReturnPct(row.minReturnPct)}</span>
+        ),
+      },
+      {
+        title: "跟踪日",
+        dataIndex: "holdingTradingDays",
+        width: 80,
+        render: (value: number) => `${value} 天`,
       },
     ],
     [],
@@ -269,6 +392,48 @@ export default function AshareSignalScannerPanel() {
       ]
     : [];
 
+  const performanceItems = performance
+    ? (["ntp", "lmacd", "confluence"] as PerformanceStrategy[]).map((strategy) => {
+        const summary = performance.summary.strategies[strategy];
+        const records = performance.records.filter((item) => item.strategy === strategy);
+
+        return {
+          key: strategy,
+          label: `${summary.label} (${summary.count})`,
+          children: (
+            <div className="space-y-4">
+              <Row gutter={[12, 12]}>
+                <Col xs={24} md={12} xl={6}>
+                  <Card size="small"><Statistic title="累计记录" value={summary.count} /></Card>
+                </Col>
+                <Col xs={24} md={12} xl={6}>
+                  <Card size="small"><Statistic title="当前胜率" value={summary.winRate ?? 0} precision={2} suffix="%" /></Card>
+                </Col>
+                <Col xs={24} md={12} xl={6}>
+                  <Card size="small"><Statistic title="平均累计收益" value={summary.averageReturnPct ?? 0} precision={2} suffix="%" valueStyle={returnColor(summary.averageReturnPct)} /></Card>
+                </Col>
+                <Col xs={24} md={12} xl={6}>
+                  <Card size="small"><Statistic title={`平均次日收益 · ${summary.nextDayTrackedCount} 笔`} value={summary.averageNextDayReturnPct ?? 0} precision={2} suffix="%" valueStyle={returnColor(summary.averageNextDayReturnPct)} /></Card>
+                </Col>
+              </Row>
+              <div className="text-xs text-slate-500">
+                当前盈利 {summary.profitableCount} 笔，亏损 {summary.losingCount} 笔，持平 {summary.flatCount} 笔；每个交易日 14:45 更新一次。
+              </div>
+              <Table<PerformanceRecord>
+                rowKey="id"
+                size="small"
+                columns={performanceColumns}
+                dataSource={records}
+                pagination={{ pageSize: 20, showSizeChanger: true }}
+                locale={{ emptyText: "还没有该类信号跟踪记录" }}
+                scroll={{ x: 1100 }}
+              />
+            </div>
+          ),
+        };
+      })
+    : [];
+
   return (
     <>
       {contextHolder}
@@ -298,7 +463,7 @@ export default function AshareSignalScannerPanel() {
       >
         <div className="space-y-4">
           <Typography.Text type="secondary">
-            每个工作日北京时间 15:30 后自动更新。日线使用最新收盘 K 线；周线只使用已经收盘的完整周 K，周五 15:00 后才纳入本周。LMACD 只统计刚触发的“底部买入”。
+            每个工作日北京时间 14:45 自动扫描，使用当时最新成交价和盘中日 K 记录信号。周线只使用已经收盘的完整周 K。LMACD 只统计刚触发的“底部买入”。
           </Typography.Text>
 
           {error && <Alert type="error" showIcon message={error} />}
@@ -336,6 +501,15 @@ export default function AshareSignalScannerPanel() {
                 <span>成功率：{result.scannedCount ? ((result.successCount / result.scannedCount) * 100).toFixed(1) : "0.0"}%</span>
               </div>
               <Tabs tabPlacement="start" items={timeframeItems} />
+              {performance && (
+                <Card size="small" title="信号触发后的持续盈亏跟踪">
+                  <div className="mb-4 text-xs text-slate-500">
+                    每次触发都会按 14:45 扫描价建立一笔独立记录；从下一交易日开始持续更新，不会因为信号消失或自选股变化而删除。
+                    最近更新：{formatDateTime(performance.updatedAt)}
+                  </div>
+                  <Tabs tabPlacement="start" items={performanceItems} />
+                </Card>
+              )}
             </>
           ) : (
             !loading && <Alert type="warning" showIcon message="还没有扫描结果，请点击“立即扫描”生成第一批分组。" />
@@ -389,4 +563,34 @@ function formatDateTime(value?: string | null) {
   return Number.isNaN(date.getTime())
     ? "—"
     : date.toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false });
+}
+
+function formatPrice(value?: number | string | null) {
+  const price = Number(value);
+  return Number.isFinite(price) ? price.toFixed(2) : "—";
+}
+
+function formatReturnPct(value?: number | null) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return "—";
+  const number = Number(value);
+  return `${number > 0 ? "+" : ""}${number.toFixed(2)}%`;
+}
+
+function returnColor(value?: number | null) {
+  if (value === null || value === undefined) return undefined;
+  if (value > 0) return { color: "#dc2626" };
+  if (value < 0) return { color: "#16a34a" };
+  return undefined;
+}
+
+function renderReturnPct(value?: number | null) {
+  const color = value === null || value === undefined
+    ? undefined
+    : value > 0
+      ? "red"
+      : value < 0
+        ? "green"
+        : "default";
+
+  return <Tag color={color}>{formatReturnPct(value)}</Tag>;
 }
