@@ -436,7 +436,12 @@ export default function AshareSignalScannerPanel() {
               size="small"
               columns={columns}
               dataSource={group.securities}
-              pagination={{ pageSize: 20, showSizeChanger: true }}
+              pagination={{
+                defaultPageSize: 20,
+                pageSizeOptions: [20, 50, 100],
+                showSizeChanger: true,
+                showTotal: (total) => `共 ${total} 条`,
+              }}
               locale={{ emptyText: "最新交易日没有标的触发该信号" }}
               scroll={{ x: 680 }}
             />
@@ -524,7 +529,12 @@ export default function AshareSignalScannerPanel() {
                 size="small"
                 columns={performanceColumns}
                 dataSource={records}
-                pagination={{ pageSize: 20, showSizeChanger: true }}
+                pagination={{
+                  defaultPageSize: 20,
+                  pageSizeOptions: [20, 50, 100],
+                  showSizeChanger: true,
+                  showTotal: (total) => `共 ${total} 条`,
+                }}
                 locale={{ emptyText: "还没有该类信号跟踪记录" }}
                 scroll={{ x: 1100 }}
               />
@@ -678,8 +688,8 @@ export default function AshareSignalScannerPanel() {
                     title="信号触发后的持续盈亏跟踪"
                   >
                     <div className="mb-4 space-y-3">
-                      <div className="flex flex-wrap items-center gap-3">
-                        <Typography.Text strong>查看触发日期</Typography.Text>
+                      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
+                        <Typography.Text strong className="text-blue-700">触发日过滤</Typography.Text>
                         <Select
                           aria-label="选择盈亏跟踪触发日期"
                           value={performanceDate}
