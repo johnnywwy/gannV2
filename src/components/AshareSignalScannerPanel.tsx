@@ -24,6 +24,7 @@ const API_BASE = "https://n1-longbridge.johnnywwy.com/api";
 const SIGNALS_URL = `${API_BASE}/scanner/a-shares/signals`;
 const RUN_URL = `${API_BASE}/scanner/a-shares/run`;
 const HISTORY_URL = `${API_BASE}/scanner/a-shares/history`;
+const PERFORMANCE_REFRESH_URL = `${API_BASE}/scanner/a-shares/performance/refresh`;
 
 type SignalSecurity = {
   symbol: string;
@@ -164,6 +165,7 @@ export default function AshareSignalScannerPanel() {
   const [snapshot, setSnapshot] = useState<ScanSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
+  const [refreshingPrices, setRefreshingPrices] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [historyIndex, setHistoryIndex] = useState<ScanHistorySummary[]>([]);
   const [selectedHistoryDate, setSelectedHistoryDate] = useState<string | null>(null);
@@ -263,6 +265,26 @@ export default function AshareSignalScannerPanel() {
       setError(nextError instanceof Error ? nextError.message : "启动扫描失败");
     } finally {
       setStarting(false);
+    }
+  };
+
+  const refreshPerformancePrices = async () => {
+    setRefreshingPrices(true);
+    try {
+      const response = await fetch(PERFORMANCE_REFRESH_URL, { method: "POST" });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || !payload?.success) {
+        throw new Error(payload?.message || `刷新当前价格失败：${response.status}`);
+      }
+      await loadSnapshot(true);
+      const marketDate = payload?.data?.marketDates?.at(-1);
+      messageApi.success(
+        `已更新 ${payload?.data?.updatedSymbolCount || 0} 只股票${marketDate ? `（行情日期 ${marketDate}）` : ""}`,
+      );
+    } catch (nextError) {
+      messageApi.error(nextError instanceof Error ? nextError.message : "刷新当前价格失败");
+    } finally {
+      setRefreshingPrices(false);
     }
   };
 
@@ -686,6 +708,17 @@ export default function AshareSignalScannerPanel() {
                     size="small"
                     className="border-t-4 border-t-blue-500 shadow-sm"
                     title="信号触发后的持续盈亏跟踪"
+                    extra={
+                      <Button
+                        type="primary"
+                        icon={<ReloadOutlined />}
+                        loading={refreshingPrices}
+                        disabled={running}
+                        onClick={() => void refreshPerformancePrices()}
+                      >
+                        刷新当前价格
+                      </Button>
+                    }
                   >
                     <div className="mb-4 space-y-3">
                       <div className="flex flex-wrap items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
