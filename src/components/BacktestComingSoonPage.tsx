@@ -1,5 +1,6 @@
-import { Typography } from "antd";
+import { Tabs, Typography } from "antd";
 import AshareSignalScannerPanel from "./AshareSignalScannerPanel";
+import UsMacdDivergencePanel from "./UsMacdDivergencePanel";
 
 export default function BacktestComingSoonPage() {
   return (
@@ -7,14 +8,20 @@ export default function BacktestComingSoonPage() {
       <div className="mx-auto max-w-[1500px] space-y-4">
         <div>
           <Typography.Title level={2} className="!mb-1">
-            A 股收盘信号扫描
+            市场收盘信号扫描
           </Typography.Title>
           <Typography.Text type="secondary">
-            扫描全 A 股日线与完整周线，分别统计 NTP、LMACD 底部买入及共振信号。
+            分市场扫描日线技术信号，并持续跟踪信号触发后的盈亏表现。
           </Typography.Text>
         </div>
 
-        <AshareSignalScannerPanel />
+        <Tabs
+          size="large"
+          items={[
+            { key: "cn", label: "A 股", children: <AshareSignalScannerPanel /> },
+            { key: "us", label: "美股 · MACD底背离", children: <UsMacdDivergencePanel /> },
+          ]}
+        />
       </div>
     </main>
   );
