@@ -19,7 +19,7 @@ export default function BacktestComingSoonPage() {
           size="large"
           items={[
             { key: "cn", label: "A 股", children: <AshareSignalScannerPanel /> },
-            { key: "us", label: "美股 · MACD底背离", children: <UsMacdDivergencePanel /> },
+            { key: "us", label: "美股", children: <UsMacdDivergencePanel /> },
           ]}
         />
       </div>

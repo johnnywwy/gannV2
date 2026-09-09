@@ -5,7 +5,6 @@ import {
   Card,
   Col,
   Divider,
-  InputNumber,
   Progress,
   Row,
   Select,
@@ -22,10 +21,29 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { saveKLineActiveSymbol } from "../utils/kLineStore";
 
 const API_BASE = "https://n1-longbridge.johnnywwy.com/api";
-const SIGNALS_URL = `${API_BASE}/scanner/a-shares/signals`;
-const RUN_URL = `${API_BASE}/scanner/a-shares/run`;
-const HISTORY_URL = `${API_BASE}/scanner/a-shares/history`;
-const PERFORMANCE_REFRESH_URL = `${API_BASE}/scanner/a-shares/performance/refresh`;
+
+type MarketVariant = "cn" | "us";
+
+const MARKET_CONFIG = {
+  cn: {
+    slug: "a-shares",
+    marketName: "A 股",
+    title: "全 A 股 · 日线 / 周线信号",
+    scheduleText: "每个工作日北京时间 15:30",
+    scheduleTime: "15:30",
+    historyText: "每天 15:30",
+    iconClass: "text-red-500",
+  },
+  us: {
+    slug: "us-macd-divergence",
+    marketName: "美股",
+    title: "全美股 · 日线 / 周线信号",
+    scheduleText: "每个美股交易日纽约时间 16:30",
+    scheduleTime: "16:30（纽约时间）",
+    historyText: "每个美股交易日 16:30（纽约时间）",
+    iconClass: "text-blue-500",
+  },
+} satisfies Record<MarketVariant, Record<string, string>>;
 
 type SignalSecurity = {
   symbol: string;
@@ -173,7 +191,12 @@ type SignalPerformance = {
   records: PerformanceRecord[];
 };
 
-export default function AshareSignalScannerPanel() {
+export default function AshareSignalScannerPanel({ market = "cn" }: { market?: MarketVariant }) {
+  const config = MARKET_CONFIG[market];
+  const SIGNALS_URL = `${API_BASE}/scanner/${config.slug}/signals`;
+  const RUN_URL = `${API_BASE}/scanner/${config.slug}/run`;
+  const HISTORY_URL = `${API_BASE}/scanner/${config.slug}/history`;
+  const PERFORMANCE_REFRESH_URL = `${API_BASE}/scanner/${config.slug}/performance/refresh`;
   const [messageApi, contextHolder] = message.useMessage();
   const [snapshot, setSnapshot] = useState<ScanSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
@@ -186,9 +209,6 @@ export default function AshareSignalScannerPanel() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [performanceDate, setPerformanceDate] = useState("all");
-  const [performanceProfitThreshold, setPerformanceProfitThreshold] = useState(5);
-  const [performanceProfitFilter, setPerformanceProfitFilter] = useState<"all" | "high" | "below">("all");
-  const [performanceDivergenceFilter, setPerformanceDivergenceFilter] = useState<"all" | "yes" | "no">("all");
 
   const loadSnapshot = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
@@ -204,7 +224,7 @@ export default function AshareSignalScannerPanel() {
     } finally {
       if (!quiet) setLoading(false);
     }
-  }, []);
+  }, [SIGNALS_URL]);
 
   const loadHistoryIndex = useCallback(async () => {
     try {
@@ -223,7 +243,7 @@ export default function AshareSignalScannerPanel() {
     } catch (nextError) {
       setHistoryError(nextError instanceof Error ? nextError.message : "历史扫描记录加载失败");
     }
-  }, []);
+  }, [HISTORY_URL]);
 
   useEffect(() => {
     void loadSnapshot();
@@ -266,7 +286,7 @@ export default function AshareSignalScannerPanel() {
 
     void loadHistoryDate();
     return () => controller.abort();
-  }, [selectedHistoryDate]);
+  }, [HISTORY_URL, selectedHistoryDate]);
 
   const startScan = async () => {
     setStarting(true);
@@ -545,20 +565,7 @@ export default function AshareSignalScannerPanel() {
           (performanceDate === "all" || item.entryMarketDate === performanceDate)
         ));
         const summary = summarizePerformanceRecords(dateRecords, strategy, performance.updatedAt);
-        const association = summarizeDivergenceAssociation(dateRecords, performanceProfitThreshold);
         const records = dateRecords
-          .filter((item) => {
-            const value = Number(item.currentReturnPct);
-            if (performanceProfitFilter === "high") return Number.isFinite(value) && value >= performanceProfitThreshold;
-            if (performanceProfitFilter === "below") return Number.isFinite(value) && value < performanceProfitThreshold;
-            return true;
-          })
-          .filter((item) => {
-            const detected = item.macdBullishDivergence?.detected === true;
-            if (performanceDivergenceFilter === "yes") return detected;
-            if (performanceDivergenceFilter === "no") return item.macdBullishDivergence?.analyzed === true && !detected;
-            return true;
-          })
           .sort((left, right) => Number(right.currentReturnPct ?? -Infinity) - Number(left.currentReturnPct ?? -Infinity));
 
         return {
@@ -581,64 +588,7 @@ export default function AshareSignalScannerPanel() {
                 </Col>
               </Row>
               <div className="text-xs text-slate-500">
-                当前盈利 {summary.profitableCount} 笔，亏损 {summary.losingCount} 笔，持平 {summary.flatCount} 笔；每个交易日 15:30 更新一次。
-              </div>
-              <div className="rounded-lg border border-violet-200 bg-violet-50 p-3">
-                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                  <Typography.Text strong className="text-violet-700">
-                    MACD 底背离与高收益关联
-                  </Typography.Text>
-                  <Typography.Text type="secondary" className="text-xs">
-                    高收益定义：累计收益 ≥ {performanceProfitThreshold}%
-                  </Typography.Text>
-                </div>
-                <Row gutter={[12, 12]}>
-                  <Col xs={24} md={12} xl={6}>
-                    <Card size="small">
-                      <Statistic
-                        title={`有底背离命中率 · ${association.withDivergence.count} 笔`}
-                        value={association.withDivergence.highProfitRate ?? 0}
-                        precision={2}
-                        suffix="%"
-                      />
-                    </Card>
-                  </Col>
-                  <Col xs={24} md={12} xl={6}>
-                    <Card size="small">
-                      <Statistic
-                        title={`无底背离命中率 · ${association.withoutDivergence.count} 笔`}
-                        value={association.withoutDivergence.highProfitRate ?? 0}
-                        precision={2}
-                        suffix="%"
-                      />
-                    </Card>
-                  </Col>
-                  <Col xs={24} md={12} xl={6}>
-                    <Card size="small">
-                      <Statistic
-                        title="高收益命中率差"
-                        value={association.highProfitRateDifference ?? 0}
-                        precision={2}
-                        suffix=" 个百分点"
-                        valueStyle={returnColor(association.highProfitRateDifference)}
-                      />
-                    </Card>
-                  </Col>
-                  <Col xs={24} md={12} xl={6}>
-                    <Card size="small">
-                      <Statistic
-                        title="平均累计收益差"
-                        value={association.averageReturnDifference ?? 0}
-                        precision={2}
-                        suffix="%"
-                        valueStyle={returnColor(association.averageReturnDifference)}
-                      />
-                    </Card>
-                  </Col>
-                </Row>
-                <div className="mt-2 text-xs text-slate-500">
-                  口径：信号触发日及此前共 5 个交易日内，价格低点创新低而 DIFF 低点未创新低。这里只展示历史样本相关性，不代表因果关系。
-                </div>
+                当前盈利 {summary.profitableCount} 笔，亏损 {summary.losingCount} 笔，持平 {summary.flatCount} 笔；每个交易日 {config.scheduleTime} 更新一次。
               </div>
               <Table<PerformanceRecord>
                 rowKey="id"
@@ -681,8 +631,8 @@ export default function AshareSignalScannerPanel() {
       <Card
         title={
           <Space>
-            <StockOutlined className="text-red-500" />
-            <span>全 A 股 · 日线 / 周线信号</span>
+            <StockOutlined className={config.iconClass} />
+            <span>{config.title}</span>
           </Space>
         }
         extra={
@@ -711,7 +661,7 @@ export default function AshareSignalScannerPanel() {
       >
         <div className="space-y-4">
           <Typography.Text type="secondary">
-            每个工作日北京时间 15:30 自动扫描，使用完整收盘日 K 和收盘扫描价记录信号。周线只使用已经收盘的完整周 K。LMACD 只统计刚触发的“底部买入”。
+            {config.scheduleText} 自动扫描，使用完整收盘日 K 和收盘扫描价记录信号。周线只使用已经收盘的完整周 K。LMACD 只统计刚触发的“底部买入”。
           </Typography.Text>
 
           {error && <Alert type="error" showIcon message={error} />}
@@ -720,7 +670,7 @@ export default function AshareSignalScannerPanel() {
             <Alert
               type="info"
               showIcon
-              message={`正在扫描 ${run.currentSymbol || "A 股市场"}`}
+              message={`正在扫描 ${run.currentSymbol || `${config.marketName}市场`}`}
               description={
                 <div className="mt-2">
                   <Progress percent={run.progress} status="active" />
@@ -741,7 +691,7 @@ export default function AshareSignalScannerPanel() {
           {result ? (
             <>
               <Row gutter={[12, 12]}>
-                <Col xs={24} md={12}><Card size="small"><Statistic title="A 股标的" value={result.universeCount} /></Card></Col>
+                <Col xs={24} md={12}><Card size="small"><Statistic title={`${config.marketName}标的`} value={result.universeCount} /></Card></Col>
                 <Col xs={24} md={12}><Card size="small"><Statistic title="成功扫描" value={result.successCount} suffix={result.failedCount ? `/ 失败 ${result.failedCount}` : ""} /></Card></Col>
               </Row>
               <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-500">
@@ -777,7 +727,7 @@ export default function AshareSignalScannerPanel() {
                 >
                   <div className="space-y-4">
                     <Typography.Text type="secondary">
-                      每天 15:30 的完整扫描名单都会按日期永久保存，可以随时切换日期查看，不受最新扫描结果覆盖。
+                      {config.historyText} 的完整扫描名单都会按日期永久保存，可以随时切换日期查看，不受最新扫描结果覆盖。
                     </Typography.Text>
                     {historyError && <Alert type="error" showIcon message={historyError} />}
                     {selectedHistorySummary && (
@@ -830,42 +780,9 @@ export default function AshareSignalScannerPanel() {
                           ]}
                           onChange={setPerformanceDate}
                         />
-                        <Typography.Text strong className="text-blue-700">高收益阈值</Typography.Text>
-                        <InputNumber
-                          aria-label="设置高收益百分比阈值"
-                          min={0}
-                          max={1000}
-                          step={1}
-                          precision={1}
-                          value={performanceProfitThreshold}
-                          addonAfter="%"
-                          onChange={(value) => setPerformanceProfitThreshold(Number(value ?? 5))}
-                        />
-                        <Select
-                          aria-label="选择累计收益筛选"
-                          value={performanceProfitFilter}
-                          className="min-w-44"
-                          options={[
-                            { value: "all", label: "全部收益" },
-                            { value: "high", label: `累计收益 ≥ ${performanceProfitThreshold}%` },
-                            { value: "below", label: `累计收益 < ${performanceProfitThreshold}%` },
-                          ]}
-                          onChange={setPerformanceProfitFilter}
-                        />
-                        <Select
-                          aria-label="选择MACD底背离筛选"
-                          value={performanceDivergenceFilter}
-                          className="min-w-44"
-                          options={[
-                            { value: "all", label: "全部MACD结构" },
-                            { value: "yes", label: "存在MACD底背离" },
-                            { value: "no", label: "没有MACD底背离" },
-                          ]}
-                          onChange={setPerformanceDivergenceFilter}
-                        />
                       </div>
                       <div className="text-xs text-slate-500">
-                        每次触发都会按 15:30 收盘扫描价建立一笔独立记录；从下一交易日开始持续更新，不会因为信号消失或自选股变化而删除。
+                        每次触发都会按 {config.scheduleTime} 收盘扫描价建立一笔独立记录；从下一交易日开始持续更新，不会因为信号消失或自选股变化而删除。
                         最近更新：{formatDateTime(performance.updatedAt)}
                       </div>
                     </div>
@@ -988,38 +905,6 @@ function formatIndicatorValue(value?: number | null) {
   return value === null || value === undefined || !Number.isFinite(value)
     ? "—"
     : value.toFixed(4);
-}
-
-function summarizeDivergenceAssociation(records: PerformanceRecord[], threshold: number) {
-  const analyzed = records.filter((item) => (
-    item.macdBullishDivergence?.analyzed === true &&
-    Number.isFinite(Number(item.currentReturnPct))
-  ));
-  const summarize = (items: PerformanceRecord[]) => {
-    const returns = items.map((item) => Number(item.currentReturnPct));
-    const highProfitCount = returns.filter((value) => value >= threshold).length;
-    return {
-      count: items.length,
-      highProfitCount,
-      highProfitRate: items.length
-        ? roundPerformanceMetric((highProfitCount / items.length) * 100, 2)
-        : null,
-      averageReturnPct: averageMetric(returns),
-    };
-  };
-  const withDivergence = summarize(analyzed.filter((item) => item.macdBullishDivergence?.detected));
-  const withoutDivergence = summarize(analyzed.filter((item) => !item.macdBullishDivergence?.detected));
-
-  return {
-    withDivergence,
-    withoutDivergence,
-    highProfitRateDifference: withDivergence.highProfitRate !== null && withoutDivergence.highProfitRate !== null
-      ? roundPerformanceMetric(withDivergence.highProfitRate - withoutDivergence.highProfitRate, 2)
-      : null,
-    averageReturnDifference: withDivergence.averageReturnPct !== null && withoutDivergence.averageReturnPct !== null
-      ? roundPerformanceMetric(withDivergence.averageReturnPct - withoutDivergence.averageReturnPct, 2)
-      : null,
-  };
 }
 
 function summarizePerformanceRecords(
