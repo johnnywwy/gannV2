@@ -32,6 +32,7 @@ const MARKET_CONFIG = {
     scheduleText: "每个工作日北京时间 15:30",
     scheduleTime: "15:30",
     historyText: "每天 15:30",
+    universeText: "",
     iconClass: "text-red-500",
   },
   us: {
@@ -41,6 +42,7 @@ const MARKET_CONFIG = {
     scheduleText: "每个美股交易日纽约时间 16:30",
     scheduleTime: "16:30（纽约时间）",
     historyText: "每个美股交易日 16:30（纽约时间）",
+    universeText: "仅扫描市值不低于 3 亿美元且股价不低于 1 美元的股票。",
     iconClass: "text-blue-500",
   },
 } satisfies Record<MarketVariant, Record<string, string>>;
@@ -662,6 +664,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
         <div className="space-y-4">
           <Typography.Text type="secondary">
             {config.scheduleText} 自动扫描，使用完整收盘日 K 和收盘扫描价记录信号。周线只使用已经收盘的完整周 K。LMACD 只统计刚触发的“底部买入”。
+            {config.universeText && ` ${config.universeText}`}
           </Typography.Text>
 
           {error && <Alert type="error" showIcon message={error} />}
