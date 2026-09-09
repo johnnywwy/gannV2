@@ -5,6 +5,7 @@ import {
   Card,
   Col,
   Divider,
+  InputNumber,
   Progress,
   Row,
   Select,
@@ -147,6 +148,18 @@ type PerformanceRecord = {
   maxReturnPct: number | null;
   minReturnPct: number | null;
   holdingTradingDays: number;
+  macdBullishDivergence?: {
+    version: number;
+    analyzed: boolean;
+    detected: boolean;
+    type: "direct" | "separated" | "both" | null;
+    detectedAt: string | null;
+    lookbackTradingDays: number;
+    priceLow: number | null;
+    previousPriceLow: number | null;
+    diffLow: number | null;
+    previousDiffLow: number | null;
+  } | null;
 };
 
 type SignalPerformance = {
@@ -173,6 +186,9 @@ export default function AshareSignalScannerPanel() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [performanceDate, setPerformanceDate] = useState("all");
+  const [performanceProfitThreshold, setPerformanceProfitThreshold] = useState(5);
+  const [performanceProfitFilter, setPerformanceProfitFilter] = useState<"all" | "high" | "below">("all");
+  const [performanceDivergenceFilter, setPerformanceDivergenceFilter] = useState<"all" | "yes" | "no">("all");
 
   const loadSnapshot = useCallback(async (quiet = false) => {
     if (!quiet) setLoading(true);
@@ -407,6 +423,12 @@ export default function AshareSignalScannerPanel() {
         render: formatPrice,
       },
       {
+        title: "MACD底背离",
+        key: "macdBullishDivergence",
+        width: 125,
+        render: (_: unknown, row: PerformanceRecord) => renderMacdDivergence(row),
+      },
+      {
         title: "累计盈亏",
         dataIndex: "currentReturnPct",
         width: 105,
@@ -518,11 +540,26 @@ export default function AshareSignalScannerPanel() {
 
   const performanceItems = performance
     ? (["ntp", "lmacd", "confluence"] as PerformanceStrategy[]).map((strategy) => {
-        const records = performance.records.filter((item) => (
+        const dateRecords = performance.records.filter((item) => (
           item.strategy === strategy &&
           (performanceDate === "all" || item.entryMarketDate === performanceDate)
         ));
-        const summary = summarizePerformanceRecords(records, strategy, performance.updatedAt);
+        const summary = summarizePerformanceRecords(dateRecords, strategy, performance.updatedAt);
+        const association = summarizeDivergenceAssociation(dateRecords, performanceProfitThreshold);
+        const records = dateRecords
+          .filter((item) => {
+            const value = Number(item.currentReturnPct);
+            if (performanceProfitFilter === "high") return Number.isFinite(value) && value >= performanceProfitThreshold;
+            if (performanceProfitFilter === "below") return Number.isFinite(value) && value < performanceProfitThreshold;
+            return true;
+          })
+          .filter((item) => {
+            const detected = item.macdBullishDivergence?.detected === true;
+            if (performanceDivergenceFilter === "yes") return detected;
+            if (performanceDivergenceFilter === "no") return item.macdBullishDivergence?.analyzed === true && !detected;
+            return true;
+          })
+          .sort((left, right) => Number(right.currentReturnPct ?? -Infinity) - Number(left.currentReturnPct ?? -Infinity));
 
         return {
           key: strategy,
@@ -546,6 +583,63 @@ export default function AshareSignalScannerPanel() {
               <div className="text-xs text-slate-500">
                 当前盈利 {summary.profitableCount} 笔，亏损 {summary.losingCount} 笔，持平 {summary.flatCount} 笔；每个交易日 15:30 更新一次。
               </div>
+              <div className="rounded-lg border border-violet-200 bg-violet-50 p-3">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                  <Typography.Text strong className="text-violet-700">
+                    MACD 底背离与高收益关联
+                  </Typography.Text>
+                  <Typography.Text type="secondary" className="text-xs">
+                    高收益定义：累计收益 ≥ {performanceProfitThreshold}%
+                  </Typography.Text>
+                </div>
+                <Row gutter={[12, 12]}>
+                  <Col xs={24} md={12} xl={6}>
+                    <Card size="small">
+                      <Statistic
+                        title={`有底背离命中率 · ${association.withDivergence.count} 笔`}
+                        value={association.withDivergence.highProfitRate ?? 0}
+                        precision={2}
+                        suffix="%"
+                      />
+                    </Card>
+                  </Col>
+                  <Col xs={24} md={12} xl={6}>
+                    <Card size="small">
+                      <Statistic
+                        title={`无底背离命中率 · ${association.withoutDivergence.count} 笔`}
+                        value={association.withoutDivergence.highProfitRate ?? 0}
+                        precision={2}
+                        suffix="%"
+                      />
+                    </Card>
+                  </Col>
+                  <Col xs={24} md={12} xl={6}>
+                    <Card size="small">
+                      <Statistic
+                        title="高收益命中率差"
+                        value={association.highProfitRateDifference ?? 0}
+                        precision={2}
+                        suffix=" 个百分点"
+                        valueStyle={returnColor(association.highProfitRateDifference)}
+                      />
+                    </Card>
+                  </Col>
+                  <Col xs={24} md={12} xl={6}>
+                    <Card size="small">
+                      <Statistic
+                        title="平均累计收益差"
+                        value={association.averageReturnDifference ?? 0}
+                        precision={2}
+                        suffix="%"
+                        valueStyle={returnColor(association.averageReturnDifference)}
+                      />
+                    </Card>
+                  </Col>
+                </Row>
+                <div className="mt-2 text-xs text-slate-500">
+                  口径：信号触发日及此前共 5 个交易日内，价格低点创新低而 DIFF 低点未创新低。这里只展示历史样本相关性，不代表因果关系。
+                </div>
+              </div>
               <Table<PerformanceRecord>
                 rowKey="id"
                 size="small"
@@ -557,8 +651,8 @@ export default function AshareSignalScannerPanel() {
                   showSizeChanger: true,
                   showTotal: (total) => `共 ${total} 条`,
                 }}
-                locale={{ emptyText: "还没有该类信号跟踪记录" }}
-                scroll={{ x: 1100 }}
+                locale={{ emptyText: "当前筛选条件下没有信号跟踪记录" }}
+                scroll={{ x: 1230 }}
               />
             </div>
           ),
@@ -736,6 +830,39 @@ export default function AshareSignalScannerPanel() {
                           ]}
                           onChange={setPerformanceDate}
                         />
+                        <Typography.Text strong className="text-blue-700">高收益阈值</Typography.Text>
+                        <InputNumber
+                          aria-label="设置高收益百分比阈值"
+                          min={0}
+                          max={1000}
+                          step={1}
+                          precision={1}
+                          value={performanceProfitThreshold}
+                          addonAfter="%"
+                          onChange={(value) => setPerformanceProfitThreshold(Number(value ?? 5))}
+                        />
+                        <Select
+                          aria-label="选择累计收益筛选"
+                          value={performanceProfitFilter}
+                          className="min-w-44"
+                          options={[
+                            { value: "all", label: "全部收益" },
+                            { value: "high", label: `累计收益 ≥ ${performanceProfitThreshold}%` },
+                            { value: "below", label: `累计收益 < ${performanceProfitThreshold}%` },
+                          ]}
+                          onChange={setPerformanceProfitFilter}
+                        />
+                        <Select
+                          aria-label="选择MACD底背离筛选"
+                          value={performanceDivergenceFilter}
+                          className="min-w-44"
+                          options={[
+                            { value: "all", label: "全部MACD结构" },
+                            { value: "yes", label: "存在MACD底背离" },
+                            { value: "no", label: "没有MACD底背离" },
+                          ]}
+                          onChange={setPerformanceDivergenceFilter}
+                        />
                       </div>
                       <div className="text-xs text-slate-500">
                         每次触发都会按 15:30 收盘扫描价建立一笔独立记录；从下一交易日开始持续更新，不会因为信号消失或自选股变化而删除。
@@ -829,6 +956,70 @@ function renderReturnPct(value?: number | null) {
         : "default";
 
   return <Tag color={color}>{formatReturnPct(value)}</Tag>;
+}
+
+function renderMacdDivergence(row: PerformanceRecord) {
+  const context = row.macdBullishDivergence;
+  if (!context?.analyzed) return <Tag>待分析</Tag>;
+  if (!context.detected) return <Tag>无</Tag>;
+
+  const typeLabel = context.type === "direct"
+    ? "直接"
+    : context.type === "separated"
+      ? "隔段"
+      : "直接+隔段";
+
+  return (
+    <Tooltip
+      title={(
+        <div>
+          <div>背离日期：{formatDate(context.detectedAt)}</div>
+          <div>价格低点：{formatPrice(context.previousPriceLow)} → {formatPrice(context.priceLow)}</div>
+          <div>DIFF 低点：{formatIndicatorValue(context.previousDiffLow)} → {formatIndicatorValue(context.diffLow)}</div>
+        </div>
+      )}
+    >
+      <Tag color="purple">有 · {typeLabel}</Tag>
+    </Tooltip>
+  );
+}
+
+function formatIndicatorValue(value?: number | null) {
+  return value === null || value === undefined || !Number.isFinite(value)
+    ? "—"
+    : value.toFixed(4);
+}
+
+function summarizeDivergenceAssociation(records: PerformanceRecord[], threshold: number) {
+  const analyzed = records.filter((item) => (
+    item.macdBullishDivergence?.analyzed === true &&
+    Number.isFinite(Number(item.currentReturnPct))
+  ));
+  const summarize = (items: PerformanceRecord[]) => {
+    const returns = items.map((item) => Number(item.currentReturnPct));
+    const highProfitCount = returns.filter((value) => value >= threshold).length;
+    return {
+      count: items.length,
+      highProfitCount,
+      highProfitRate: items.length
+        ? roundPerformanceMetric((highProfitCount / items.length) * 100, 2)
+        : null,
+      averageReturnPct: averageMetric(returns),
+    };
+  };
+  const withDivergence = summarize(analyzed.filter((item) => item.macdBullishDivergence?.detected));
+  const withoutDivergence = summarize(analyzed.filter((item) => !item.macdBullishDivergence?.detected));
+
+  return {
+    withDivergence,
+    withoutDivergence,
+    highProfitRateDifference: withDivergence.highProfitRate !== null && withoutDivergence.highProfitRate !== null
+      ? roundPerformanceMetric(withDivergence.highProfitRate - withoutDivergence.highProfitRate, 2)
+      : null,
+    averageReturnDifference: withDivergence.averageReturnPct !== null && withoutDivergence.averageReturnPct !== null
+      ? roundPerformanceMetric(withDivergence.averageReturnPct - withoutDivergence.averageReturnPct, 2)
+      : null,
+  };
 }
 
 function summarizePerformanceRecords(
