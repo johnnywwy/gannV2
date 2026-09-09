@@ -62,6 +62,8 @@ type Snapshot = {
   result: null | {
     completedAt: string;
     signalDate: string;
+    backfillStartDate: string;
+    backfillTradingDayCount: number;
     listedCount: number;
     universeCount: number;
     successCount: number;
@@ -75,6 +77,7 @@ type Snapshot = {
   };
   performance: null | {
     updatedAt: string;
+    backfillStartDate?: string;
     records: PerformanceRecord[];
   };
   run: {
@@ -207,7 +210,7 @@ export default function UsMacdDivergencePanel() {
       >
         <div className="space-y-4">
           <Typography.Text type="secondary">
-            扫描活跃美股普通股票，排除明显的 ETF、ETN、权证、优先股和 Unit。按纽约时间 16:30 自动运行，使用与 LMACD 完全相同的直接/隔段底背离公式。
+            扫描活跃美股普通股票，排除明显的 ETF、ETN、权证、优先股和 Unit。按纽约时间 16:30 自动运行，使用与 A 股完全相同的直接/隔段底背离公式，并从 2026-08-26 起统一回溯收益。
           </Typography.Text>
           {error && <Alert type="error" showIcon message={error} />}
           {running && run && (
@@ -229,9 +232,10 @@ export default function UsMacdDivergencePanel() {
           {result ? (
             <>
               <Row gutter={[12, 12]}>
-                <Col xs={24} md={8}><Card size="small"><Statistic title="候选证券" value={result.listedCount} /></Card></Col>
-                <Col xs={24} md={8}><Card size="small"><Statistic title="活跃普通股票" value={result.universeCount} /></Card></Col>
-                <Col xs={24} md={8}><Card size="small"><Statistic title="今日底背离" value={result.groups.bullishDivergence.count} /></Card></Col>
+                <Col xs={24} md={6}><Card size="small"><Statistic title="候选证券" value={result.listedCount} /></Card></Col>
+                <Col xs={24} md={6}><Card size="small"><Statistic title="活跃普通股票" value={result.universeCount} /></Card></Col>
+                <Col xs={24} md={6}><Card size="small"><Statistic title="今日底背离" value={result.groups.bullishDivergence.count} /></Card></Col>
+                <Col xs={24} md={6}><Card size="small"><Statistic title="回溯起始日" value={result.backfillStartDate} /></Card></Col>
               </Row>
               <div className="flex flex-wrap gap-x-6 text-xs text-slate-500">
                 <span>美股交易日：{result.signalDate}</span>
@@ -260,7 +264,7 @@ export default function UsMacdDivergencePanel() {
               <Divider />
               <Card
                 size="small"
-                title="美股底背离持续盈亏跟踪"
+                title={`美股底背离持续盈亏跟踪（${performance?.backfillStartDate || result.backfillStartDate} 起）`}
                 extra={<Button icon={<ReloadOutlined />} loading={refreshing} disabled={running} onClick={() => void refreshPrices()}>刷新当前价格</Button>}
               >
                 <div className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
