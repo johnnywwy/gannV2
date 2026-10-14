@@ -186,6 +186,12 @@ type SignalPerformance = {
   version: number;
   updatedAt: string;
   scanTime: string;
+  selectedDate?: string | null;
+  availableDates?: Array<{
+    date: string;
+    count: number;
+    trackedCount: number;
+  }>;
   summary: {
     totalCount: number;
     strategies: Record<PerformanceStrategy, PerformanceSummary>;
@@ -210,16 +216,20 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
   const [historyResult, setHistoryResult] = useState<ScanResult | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
-  const [performanceDate, setPerformanceDate] = useState("all");
+  const [performanceDate, setPerformanceDate] = useState("latest");
 
-  const loadSnapshot = useCallback(async (quiet = false) => {
+  const loadSnapshot = useCallback(async (quiet = false, requestedPerformanceDate = "latest") => {
     if (!quiet) setLoading(true);
     try {
-      const response = await fetch(SIGNALS_URL, { cache: "no-store" });
+      const url = new URL(SIGNALS_URL);
+      url.searchParams.set("performanceDate", requestedPerformanceDate);
+      const response = await fetch(url, { cache: "no-store" });
       if (!response.ok) throw new Error(`扫描结果接口失败：${response.status}`);
       const payload = await response.json();
       if (!payload?.success || !payload?.data) throw new Error("扫描结果格式不正确");
       setSnapshot(payload.data);
+      const selectedDate = payload.data.performance?.selectedDate;
+      setPerformanceDate(requestedPerformanceDate === "all" ? "all" : selectedDate || requestedPerformanceDate);
       setError(null);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "扫描结果加载失败");
@@ -254,7 +264,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
 
   useEffect(() => {
     if (snapshot?.run?.status !== "running") return undefined;
-    const timer = window.setInterval(() => void loadSnapshot(true), 10_000);
+    const timer = window.setInterval(() => void loadSnapshot(true, "latest"), 10_000);
     return () => window.clearInterval(timer);
   }, [loadSnapshot, snapshot?.run?.status]);
 
@@ -303,7 +313,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
       if (!response.ok || !payload?.success) {
         throw new Error(payload?.message || `启动扫描失败：${response.status}`);
       }
-      await loadSnapshot(true);
+      await loadSnapshot(true, performanceDate);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "启动扫描失败");
     } finally {
@@ -319,7 +329,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
       if (!response.ok || !payload?.success) {
         throw new Error(payload?.message || `刷新当前价格失败：${response.status}`);
       }
-      await loadSnapshot(true);
+      await loadSnapshot(true, performanceDate);
       const marketDate = payload?.data?.marketDates?.at(-1);
       messageApi.success(
         `已更新 ${payload?.data?.updatedSymbolCount || 0} 只股票${marketDate ? `（行情日期 ${marketDate}）` : ""}`,
@@ -336,21 +346,9 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
   const run = snapshot?.run;
   const running = run?.status === "running";
   const performanceDates = useMemo(
-    () => [...new Set((performance?.records || []).map((item) => item.entryMarketDate))]
-      .filter(Boolean)
-      .sort((left, right) => right.localeCompare(left)),
+    () => performance?.availableDates || [],
     [performance],
   );
-
-  useEffect(() => {
-    if (!performanceDates.length) return;
-    if (performanceDate !== "all" && performanceDates.includes(performanceDate)) return;
-
-    const latestTrackedDate = performanceDates.find((date) => (
-      performance?.records.some((item) => item.entryMarketDate === date && item.holdingTradingDays > 0)
-    ));
-    setPerformanceDate(latestTrackedDate || performanceDates[0]);
-  }, [performance, performanceDate, performanceDates]);
 
   const copyGroupTable = async (group: SignalGroup) => {
     try {
@@ -648,7 +646,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
               icon={<ReloadOutlined />}
               loading={loading}
               onClick={() => {
-                void loadSnapshot();
+                void loadSnapshot(false, performanceDate);
                 void loadHistoryIndex();
               }}
             >
@@ -780,13 +778,16 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
                           value={performanceDate}
                           className="min-w-56"
                           options={[
-                            { value: "all", label: `全部日期 · ${performance.records.length} 笔` },
-                            ...performanceDates.map((date) => ({
-                              value: date,
-                              label: `${date} · ${performance.records.filter((item) => item.entryMarketDate === date).length} 笔`,
+                            { value: "all", label: `全部日期 · ${performance.summary.totalCount} 笔` },
+                            ...performanceDates.map((item) => ({
+                              value: item.date,
+                              label: `${item.date} · ${item.count} 笔`,
                             })),
                           ]}
-                          onChange={setPerformanceDate}
+                          onChange={(date) => {
+                            setPerformanceDate(date);
+                            void loadSnapshot(true, date);
+                          }}
                         />
                       </div>
                       <div className="text-xs text-slate-500">
