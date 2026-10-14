@@ -250,13 +250,18 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
   useEffect(() => {
     void loadSnapshot();
     void loadHistoryIndex();
-    const timer = window.setInterval(() => void loadSnapshot(true), 10_000);
-    const historyTimer = window.setInterval(() => void loadHistoryIndex(), 60_000);
-    return () => {
-      window.clearInterval(timer);
-      window.clearInterval(historyTimer);
-    };
   }, [loadHistoryIndex, loadSnapshot]);
+
+  useEffect(() => {
+    if (snapshot?.run?.status !== "running") return undefined;
+    const timer = window.setInterval(() => void loadSnapshot(true), 10_000);
+    return () => window.clearInterval(timer);
+  }, [loadSnapshot, snapshot?.run?.status]);
+
+  useEffect(() => {
+    const historyTimer = window.setInterval(() => void loadHistoryIndex(), 60_000);
+    return () => window.clearInterval(historyTimer);
+  }, [loadHistoryIndex]);
 
   useEffect(() => {
     if (!selectedHistoryDate) {
