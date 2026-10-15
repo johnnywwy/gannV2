@@ -199,11 +199,53 @@ type SignalPerformance = {
   records: PerformanceRecord[];
 };
 
+type PerformancePage = SignalPerformance & {
+  pagination: {
+    page: number;
+    pageSize: number;
+    pageCount: number;
+    total: number;
+  };
+};
+
+async function loadAllPerformancePages(performanceUrl: string) {
+  const loadPage = async (page: number): Promise<PerformancePage> => {
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const url = new URL(performanceUrl);
+        url.searchParams.set("performanceDate", "all");
+        url.searchParams.set("page", String(page));
+        url.searchParams.set("pageSize", "500");
+        const response = await fetch(url, { cache: "no-store" });
+        if (!response.ok) throw new Error(`盈亏跟踪接口失败：${response.status}`);
+        const payload = await response.json();
+        if (!payload?.success || !payload?.data?.pagination) throw new Error("盈亏跟踪格式不正确");
+        return payload.data as PerformancePage;
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error("盈亏跟踪加载失败");
+  };
+
+  const firstPage = await loadPage(1);
+  const remainingPages = await Promise.all(
+    Array.from({ length: Math.max(0, firstPage.pagination.pageCount - 1) }, (_, index) => loadPage(index + 2)),
+  );
+
+  return {
+    ...firstPage,
+    records: [firstPage, ...remainingPages].flatMap((page) => page.records),
+  } satisfies PerformancePage;
+}
+
 export default function AshareSignalScannerPanel({ market = "cn" }: { market?: MarketVariant }) {
   const config = MARKET_CONFIG[market];
   const SIGNALS_URL = `${API_BASE}/scanner/${config.slug}/signals`;
   const RUN_URL = `${API_BASE}/scanner/${config.slug}/run`;
   const HISTORY_URL = `${API_BASE}/scanner/${config.slug}/history`;
+  const PERFORMANCE_URL = `${API_BASE}/scanner/${config.slug}/performance`;
   const PERFORMANCE_REFRESH_URL = `${API_BASE}/scanner/${config.slug}/performance/refresh`;
   const [messageApi, contextHolder] = message.useMessage();
   const [snapshot, setSnapshot] = useState<ScanSnapshot | null>(null);
@@ -222,13 +264,16 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
     if (!quiet) setLoading(true);
     try {
       const url = new URL(SIGNALS_URL);
-      url.searchParams.set("performanceDate", requestedPerformanceDate);
+      url.searchParams.set("performanceDate", requestedPerformanceDate === "all" ? "latest" : requestedPerformanceDate);
       const response = await fetch(url, { cache: "no-store" });
       if (!response.ok) throw new Error(`扫描结果接口失败：${response.status}`);
       const payload = await response.json();
       if (!payload?.success || !payload?.data) throw new Error("扫描结果格式不正确");
-      setSnapshot(payload.data);
-      const selectedDate = payload.data.performance?.selectedDate;
+      const nextSnapshot = requestedPerformanceDate === "all"
+        ? { ...payload.data, performance: await loadAllPerformancePages(PERFORMANCE_URL) }
+        : payload.data;
+      setSnapshot(nextSnapshot);
+      const selectedDate = nextSnapshot.performance?.selectedDate;
       setPerformanceDate(requestedPerformanceDate === "all" ? "all" : selectedDate || requestedPerformanceDate);
       setError(null);
     } catch (nextError) {
@@ -236,7 +281,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
     } finally {
       if (!quiet) setLoading(false);
     }
-  }, [SIGNALS_URL]);
+  }, [PERFORMANCE_URL, SIGNALS_URL]);
 
   const loadHistoryIndex = useCallback(async () => {
     try {
