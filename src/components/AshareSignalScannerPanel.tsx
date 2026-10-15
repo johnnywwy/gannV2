@@ -216,9 +216,9 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
   const [historyResult, setHistoryResult] = useState<ScanResult | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
-  const [performanceDate, setPerformanceDate] = useState("latest");
+  const [performanceDate, setPerformanceDate] = useState("all");
 
-  const loadSnapshot = useCallback(async (quiet = false, requestedPerformanceDate = "latest") => {
+  const loadSnapshot = useCallback(async (quiet = false, requestedPerformanceDate = "all") => {
     if (!quiet) setLoading(true);
     try {
       const url = new URL(SIGNALS_URL);
@@ -264,9 +264,9 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
 
   useEffect(() => {
     if (snapshot?.run?.status !== "running") return undefined;
-    const timer = window.setInterval(() => void loadSnapshot(true, "latest"), 10_000);
+    const timer = window.setInterval(() => void loadSnapshot(true, performanceDate), 10_000);
     return () => window.clearInterval(timer);
-  }, [loadSnapshot, snapshot?.run?.status]);
+  }, [loadSnapshot, performanceDate, snapshot?.run?.status]);
 
   useEffect(() => {
     const historyTimer = window.setInterval(() => void loadHistoryIndex(), 60_000);
@@ -348,6 +348,10 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
   const performanceDates = useMemo(
     () => performance?.availableDates || [],
     [performance],
+  );
+  const performanceRecordCount = useMemo(
+    () => performanceDates.reduce((total, item) => total + item.count, 0),
+    [performanceDates],
   );
 
   const copyGroupTable = async (group: SignalGroup) => {
@@ -778,7 +782,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
                           value={performanceDate}
                           className="min-w-56"
                           options={[
-                            { value: "all", label: `全部日期 · ${performance.summary.totalCount} 笔` },
+                            { value: "all", label: `全部日期 · ${performanceRecordCount} 笔` },
                             ...performanceDates.map((item) => ({
                               value: item.date,
                               label: `${item.date} · ${item.count} 笔`,
