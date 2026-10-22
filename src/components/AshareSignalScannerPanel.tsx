@@ -131,6 +131,7 @@ type ScanSnapshot = {
 };
 
 type PerformanceStrategy = "ntp" | "lmacd" | "confluence";
+type NtpSignalFilter = "all" | "买1" | "买2";
 
 type PerformanceSummary = {
   strategy: PerformanceStrategy;
@@ -259,6 +260,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [performanceDate, setPerformanceDate] = useState("all");
+  const [ntpSignalFilter, setNtpSignalFilter] = useState<NtpSignalFilter>("all");
 
   const loadSnapshot = useCallback(async (quiet = false, requestedPerformanceDate = "all") => {
     if (!quiet) setLoading(true);
@@ -618,8 +620,18 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
           item.strategy === strategy &&
           (performanceDate === "all" || item.entryMarketDate === performanceDate)
         ));
-        const summary = summarizePerformanceRecords(dateRecords, strategy, performance.updatedAt);
-        const records = dateRecords
+        const ntpSignalCounts = strategy === "ntp"
+          ? {
+              all: dateRecords.length,
+              "买1": dateRecords.filter((item) => item.signal === "买1").length,
+              "买2": dateRecords.filter((item) => item.signal === "买2").length,
+            }
+          : null;
+        const filteredRecords = strategy === "ntp" && ntpSignalFilter !== "all"
+          ? dateRecords.filter((item) => item.signal === ntpSignalFilter)
+          : dateRecords;
+        const summary = summarizePerformanceRecords(filteredRecords, strategy, performance.updatedAt);
+        const records = [...filteredRecords]
           .sort((left, right) => Number(right.currentReturnPct ?? -Infinity) - Number(left.currentReturnPct ?? -Infinity));
 
         return {
@@ -627,6 +639,25 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
           label: `${summary.label} (${summary.count})`,
           children: (
             <div className="space-y-4">
+              {strategy === "ntp" && ntpSignalCounts && (
+                <div className="flex flex-wrap items-center gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+                  <Typography.Text strong className="text-red-700">NTP 信号筛选</Typography.Text>
+                  <Select<NtpSignalFilter>
+                    aria-label="筛选NTP买入信号"
+                    value={ntpSignalFilter}
+                    className="min-w-48"
+                    options={[
+                      { value: "all", label: `全部买入 · ${ntpSignalCounts.all} 笔` },
+                      { value: "买1", label: `买1 · ${ntpSignalCounts["买1"]} 笔` },
+                      { value: "买2", label: `买2 · ${ntpSignalCounts["买2"]} 笔` },
+                    ]}
+                    onChange={setNtpSignalFilter}
+                  />
+                  <Typography.Text type="secondary" className="text-xs">
+                    筛选后，下方统计和明细表会同步重算。
+                  </Typography.Text>
+                </div>
+              )}
               <Row gutter={[12, 12]}>
                 <Col xs={24} md={12} xl={6}>
                   <Card size="small"><Statistic title="累计记录" value={summary.count} /></Card>
