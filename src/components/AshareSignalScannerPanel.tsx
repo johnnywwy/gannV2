@@ -19,6 +19,7 @@ import {
 } from "antd";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { saveKLineActiveSymbol } from "../utils/kLineStore";
+import PushNotificationButton from "./PushNotificationButton";
 
 const API_BASE = "https://n1-longbridge.johnnywwy.com/api";
 
@@ -722,6 +723,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
         }
         extra={
           <Space>
+            <PushNotificationButton />
             <Button
               icon={<ReloadOutlined />}
               loading={loading}
