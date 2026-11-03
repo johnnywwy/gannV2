@@ -1,21 +1,21 @@
-import { AppstoreOutlined, ExperimentOutlined, StockOutlined } from '@ant-design/icons'
-import { Button } from 'antd'
+import { Icon } from '@iconify/react'
+import { Button } from '@heroui/react'
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import BacktestComingSoonPage from './components/BacktestComingSoonPage'
 import KLineChartPage from './components/KLineChartPage'
-import SquareNineChart from './components/SquareNineChart'
+import SquareNineWebPage from './platforms/web/SquareNineWebPage'
 import StatisticsPage from './components/StatisticsPage'
 
 const menuItems = [
-  { path: '/', label: '九方图', icon: <AppstoreOutlined /> },
-  { path: '/kline', label: 'K线图', icon: <StockOutlined /> },
-  { path: '/backtest', label: '回溯测试', icon: <ExperimentOutlined /> },
+  { path: '/', label: '九方图', icon: 'gravity-ui:grid' },
+  { path: '/kline', label: 'K线图', icon: 'gravity-ui:chart-column' },
+  { path: '/backtest', label: '回溯测试', icon: 'gravity-ui:flask' },
 ]
 
 function App() {
   return (
     <HashRouter>
-      <div className="min-h-screen bg-[#f5f5f5]">
+      <div className="min-h-screen bg-background">
         <AnimatedRoutes />
         <BottomMenu />
       </div>
@@ -29,7 +29,7 @@ function AnimatedRoutes() {
   return (
     <div key={location.pathname} className="page-route">
       <Routes location={location}>
-        <Route path="/" element={<SquareNineChart />} />
+        <Route path="/" element={<SquareNineWebPage />} />
         <Route path="/kline" element={<KLineChartPage />} />
         <Route path="/backtest" element={<BacktestComingSoonPage />} />
         <Route path="/statistics" element={<StatisticsPage />} />
@@ -44,18 +44,20 @@ function BottomMenu() {
   const navigate = useNavigate()
 
   return (
-    <nav className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 px-3">
-      <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-2 py-2 shadow-lg">
+    <nav className="fixed bottom-[calc(0.75rem+env(safe-area-inset-bottom))] left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-md -translate-x-1/2 sm:w-auto sm:max-w-none sm:px-3">
+      <div className="flex items-center gap-1 rounded-full border border-separator bg-surface/95 p-1.5 shadow-surface backdrop-blur-xl sm:gap-2 sm:p-2">
         {menuItems.map((item) => {
           const active = location.pathname === item.path
           return (
             <Button
               key={item.path}
-              type={active ? 'primary' : 'default'}
-              shape="round"
-              icon={item.icon}
-              onClick={() => navigate(item.path)}
+              size="sm"
+              variant={active ? 'primary' : 'ghost'}
+              onPress={() => navigate(item.path)}
+              aria-current={active ? 'page' : undefined}
+              className="min-h-11 flex-1 rounded-full px-2.5 sm:flex-none sm:px-4"
             >
+              <Icon icon={item.icon} aria-hidden="true" />
               {item.label}
             </Button>
           )
