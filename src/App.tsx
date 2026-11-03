@@ -1,5 +1,6 @@
 import { Icon } from '@iconify/react'
 import { Button } from '@heroui/react'
+import { useEffect, useRef, useState } from 'react'
 import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import BacktestComingSoonPage from './components/BacktestComingSoonPage'
 import KLineChartPage from './components/KLineChartPage'
@@ -16,10 +17,61 @@ function App() {
   return (
     <HashRouter>
       <div className="min-h-screen bg-background">
+        <PullToRefresh />
         <AnimatedRoutes />
         <BottomMenu />
       </div>
     </HashRouter>
+  )
+}
+
+function PullToRefresh() {
+  const start = useRef<number | null>(null)
+  const distance = useRef(0)
+  const [pull, setPull] = useState(0)
+
+  useEffect(() => {
+    const reset = () => {
+      start.current = null
+      distance.current = 0
+      setPull(0)
+    }
+    const begin = (event: TouchEvent) => {
+      if (!window.matchMedia('(max-width: 767px)').matches || window.scrollY > 0 || event.touches.length !== 1) return
+      const target = event.target as Element
+      if (target.closest('input, button, canvas, textarea, select')) return
+      start.current = event.touches[0].clientY
+    }
+    const move = (event: TouchEvent) => {
+      if (start.current === null) return
+      if (window.scrollY > 0 || event.touches.length !== 1) return reset()
+      distance.current = Math.max(0, event.touches[0].clientY - start.current)
+      setPull(Math.min(distance.current, 120))
+    }
+    const end = () => {
+      const refresh = distance.current >= 90
+      reset()
+      if (refresh) window.location.reload()
+    }
+    document.addEventListener('touchstart', begin, { passive: true })
+    document.addEventListener('touchmove', move, { passive: true })
+    document.addEventListener('touchend', end)
+    document.addEventListener('touchcancel', reset)
+    return () => {
+      document.removeEventListener('touchstart', begin)
+      document.removeEventListener('touchmove', move)
+      document.removeEventListener('touchend', end)
+      document.removeEventListener('touchcancel', reset)
+    }
+  }, [])
+
+  if (pull < 15) return null
+  return (
+    <div role="status" className="pointer-events-none fixed inset-x-0 top-[calc(0.75rem+env(safe-area-inset-top))] z-[60] flex justify-center md:hidden">
+      <span className="rounded-full border border-separator bg-surface px-4 py-2 text-sm text-foreground shadow-lg">
+        {pull >= 90 ? '松开刷新' : '下拉刷新'}
+      </span>
+    </div>
   )
 }
 
