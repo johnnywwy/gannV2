@@ -341,30 +341,38 @@ export default function SquareNineWebPage() {
         </section>
 
         <div className="mt-3 grid gap-3">
-          <MobilePanel icon="gravity-ui:sliders" title="图表参数" subtitle="定位数值与显示尺寸">
-            <div className="grid gap-4 pt-2">
-              <NumberField
-                value={searchValue}
-                minValue={1}
-                maxValue={maxValue}
-                step={1}
-                onChange={(value) => setSearchValue(value ?? 1)}
-                fullWidth
-                variant="secondary"
-              >
-                <Label>定位数值</Label>
-                <NumberField.Group>
-                  <NumberField.DecrementButton />
-                  <NumberField.Input onKeyDown={(event) => event.key === 'Enter' && locate()} />
-                  <NumberField.IncrementButton />
-                </NumberField.Group>
-              </NumberField>
-              <Button variant="primary" onPress={locate} fullWidth className="min-h-11 rounded-xl">
-                <Icon icon="gravity-ui:magnifier" aria-hidden="true" />
-                定位到九方图
-              </Button>
-            </div>
-          </MobilePanel>
+          <section
+            className="grid min-h-16 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border border-separator bg-surface px-4 py-3 shadow-surface"
+            aria-label="图表参数"
+          >
+            <span className="whitespace-nowrap text-sm font-semibold">定位数值</span>
+            <NumberField
+              value={searchValue}
+              minValue={1}
+              maxValue={maxValue}
+              step={1}
+              onChange={(value) => setSearchValue(value ?? 1)}
+              fullWidth
+              variant="secondary"
+              className="min-w-0 flex-1"
+            >
+              <Label className="sr-only">定位数值</Label>
+              <NumberField.Group>
+                <NumberField.DecrementButton />
+                <NumberField.Input onKeyDown={(event) => event.key === 'Enter' && locate()} />
+                <NumberField.IncrementButton />
+              </NumberField.Group>
+            </NumberField>
+            <Button
+              size="sm"
+              variant="secondary"
+              onPress={locate}
+              aria-label="定位到九方图"
+              className="min-h-10 rounded-xl px-4 font-semibold"
+            >
+              定位
+            </Button>
+          </section>
 
           <MobilePanel icon="gravity-ui:target" title="验证点位" subtitle="主线与副线延伸结果">
             <div className="grid gap-4 pt-2">
