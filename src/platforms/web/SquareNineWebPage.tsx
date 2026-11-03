@@ -106,10 +106,11 @@ export default function SquareNineWebPage() {
     drawSquareNine(canvas, matrix, {
       cellSize,
       selectedValue: effectiveSelectedValue,
+      trend,
       mainLine: trendResult?.mainLine ?? [],
       crossLine: trendResult?.crossLine ?? [],
     })
-  }, [cellSize, effectiveSelectedValue, matrix, trendResult])
+  }, [cellSize, effectiveSelectedValue, matrix, trend, trendResult])
 
   const locate = useCallback(() => {
     const value = clamp(Math.round(searchValue || 1), 1, maxValue)
@@ -288,22 +289,33 @@ export default function SquareNineWebPage() {
             <div className="flex min-h-full min-w-full items-center justify-center">{chart}</div>
           </div>
 
-          <div className="grid grid-cols-3 gap-2 border-t border-separator p-3">
-            {MOBILE_LOOPS.map((preset) => {
-              const dimension = preset * 2 + 1
-              return (
-                <Button
-                  key={preset}
-                  size="sm"
-                  variant={loop === preset ? 'primary' : 'ghost'}
-                  onPress={() => setMobileLoop(preset)}
-                  aria-label={`设置为 ${dimension} 乘 ${dimension} 行列`}
-                  className="min-h-11 rounded-xl"
-                >
-                  {dimension}×{dimension}
-                </Button>
-              )
-            })}
+          <div className="border-t border-separator p-3">
+            <div
+              className="grid grid-cols-3 gap-1 rounded-2xl bg-surface-secondary p-1"
+              role="group"
+              aria-label="九方图行列密度"
+            >
+              {MOBILE_LOOPS.map((preset) => {
+                const dimension = preset * 2 + 1
+                const active = loop === preset
+                return (
+                  <Button
+                    key={preset}
+                    size="sm"
+                    variant="ghost"
+                    onPress={() => setMobileLoop(preset)}
+                    aria-label={`设置为 ${dimension} 乘 ${dimension} 行列`}
+                    aria-pressed={active}
+                    className={`min-h-10 rounded-xl px-2 transition-shadow ${
+                      active ? 'bg-surface font-semibold shadow-sm ring-1 ring-separator' : 'text-muted'
+                    }`}
+                  >
+                    {active && <Icon icon="gravity-ui:check" className="size-3.5" aria-hidden="true" />}
+                    {dimension}×{dimension}
+                  </Button>
+                )
+              })}
+            </div>
           </div>
         </section>
 
@@ -450,11 +462,12 @@ function drawSquareNine(
   options: {
     cellSize: number
     selectedValue: number
+    trend: Trend
     mainLine: MatrixPoint[]
     crossLine: MatrixPoint[]
   },
 ) {
-  const { cellSize, selectedValue, mainLine, crossLine } = options
+  const { cellSize, selectedValue, trend, mainLine, crossLine } = options
   const size = matrix.length
   const cssSize = size * cellSize
   const ratio = window.devicePixelRatio || 1
@@ -466,14 +479,12 @@ function drawSquareNine(
   if (!context) return
   context.setTransform(ratio, 0, 0, ratio, 0, 0)
 
-  const styles = getComputedStyle(document.documentElement)
-  const color = (token: string, fallback: string) => styles.getPropertyValue(token).trim() || fallback
-  const background = color('--color-background', '#ffffff')
-  const surface = color('--color-surface-secondary', '#f4f4f5')
-  const foreground = color('--color-foreground', '#18181b')
-  const muted = color('--color-muted', '#71717a')
-  const accent = color('--color-accent', '#006fee')
-  const separator = color('--color-separator', '#d4d4d8')
+  const background = '#ffffff'
+  const foreground = '#0f172a'
+  const separator = '#d9d9d9'
+  const selectedFill = trend === 'down' ? '#ffccc7' : '#52c41a'
+  const highlightFill = trend === 'down' ? '#52c41a' : '#ffccc7'
+  const highlightText = trend === 'down' ? '#ffffff' : '#a8071a'
 
   const mainKeys = new Set(mainLine.map((point) => `${point.r}:${point.c}`))
   const crossKeys = new Set(crossLine.map((point) => `${point.r}:${point.c}`))
@@ -491,24 +502,23 @@ function drawSquareNine(
       const y = row * cellSize
       const key = `${row}:${col}`
       const selected = value === selectedValue
-      context.fillStyle = selected
-        ? accent
-        : mainKeys.has(key)
-          ? '#dcfce7'
-          : crossKeys.has(key)
-            ? '#fef3c7'
-            : surface
+      const isTrendHit = mainKeys.has(key) || crossKeys.has(key)
+      const center = Math.floor(size / 2)
+      const ringBand = Math.max(Math.abs(row - center), Math.abs(col - center))
+      context.fillStyle = ringBand % 2 === 0 ? '#ffffff' : '#eef4ff'
+      if (isTrendHit) context.fillStyle = highlightFill
+      if (selected) context.fillStyle = selectedFill
       context.fillRect(x, y, cellSize, cellSize)
       context.strokeStyle = separator
       context.lineWidth = selected ? 2 : 0.75
       context.strokeRect(x + 0.5, y + 0.5, cellSize - 1, cellSize - 1)
-      context.fillStyle = selected ? background : value === 1 ? accent : foreground
+      context.fillStyle = selected ? '#ffffff' : isTrendHit ? highlightText : foreground
       if (cellSize >= 20) context.fillText(String(value), x + cellSize / 2, y + cellSize / 2)
     }
   }
 
   if (cellSize < 20) {
-    context.fillStyle = muted
+    context.fillStyle = '#71717a'
     context.font = '11px ui-sans-serif, system-ui'
     context.fillText(`${size} × ${size}`, cssSize / 2, cssSize - 10)
   }
