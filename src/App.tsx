@@ -96,21 +96,21 @@ function BottomMenu() {
   const navigate = useNavigate()
 
   return (
-    <nav className="fixed bottom-[calc(1.5rem+env(safe-area-inset-bottom))] left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-md -translate-x-1/2 sm:w-auto sm:max-w-none sm:px-3">
-      <div className="flex items-center gap-1 rounded-full border border-separator bg-surface/95 p-1.5 shadow-surface backdrop-blur-xl sm:gap-2 sm:p-2">
+    <nav aria-label="主导航" className="fixed bottom-[calc(1.5rem+env(safe-area-inset-bottom))] left-1/2 z-50 w-[min(290px,calc(100%-2rem))] -translate-x-1/2">
+      <div className="grid grid-cols-3 gap-1 rounded-full border border-separator/60 bg-surface/85 p-1.5 shadow-lg backdrop-blur-2xl">
         {menuItems.map((item) => {
           const active = location.pathname === item.path
           return (
             <Button
               key={item.path}
               size="sm"
-              variant={active ? 'primary' : 'ghost'}
+              variant="ghost"
               onPress={() => navigate(item.path)}
               aria-current={active ? 'page' : undefined}
-              className="min-h-11 flex-1 rounded-full px-2.5 sm:flex-none sm:px-4"
+              className={`!h-14 !min-w-0 flex-col !gap-0.5 rounded-full !px-2 !py-1 ${active ? 'bg-default text-accent' : 'text-foreground'}`}
             >
-              <Icon icon={item.icon} aria-hidden="true" />
-              {item.label}
+              <Icon icon={item.icon} className="size-6" aria-hidden="true" />
+              <span className="text-[11px] font-medium leading-4">{item.label}</span>
             </Button>
           )
         })}
