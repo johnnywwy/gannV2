@@ -259,7 +259,9 @@ export default function SquareNineWebPage() {
           <div className="flex items-center justify-between gap-3 px-4 py-3">
             <div>
               <p className="text-sm font-semibold">选中 {effectiveSelectedValue}</p>
-              <p className="text-xs text-muted">{trend === 'up' ? '上升趋势' : '下降趋势'} · 点击格子查看点位</p>
+              <p className="text-xs text-muted">
+                {trend === 'up' ? '上升趋势' : '下降趋势'} · {size > 13 ? '拖动画布查看全部格子' : '点击格子查看点位'}
+              </p>
             </div>
             <div className="flex rounded-full bg-surface-secondary p-1">
               <Button
@@ -285,8 +287,11 @@ export default function SquareNineWebPage() {
             </div>
           </div>
 
-          <div ref={viewportRef} className="aspect-square w-full overflow-hidden bg-surface-secondary">
-            <div className="flex min-h-full min-w-full items-center justify-center">{chart}</div>
+          <div
+            ref={viewportRef}
+            className="aspect-square w-full touch-pan-x touch-pan-y overflow-auto overscroll-contain bg-surface-secondary"
+          >
+            <div className="grid min-h-full min-w-full place-items-center">{chart}</div>
           </div>
 
           <div className="border-t border-separator p-3">
