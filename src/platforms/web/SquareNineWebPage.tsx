@@ -139,17 +139,17 @@ export default function SquareNineWebPage() {
         </div>
         <div className="grid grid-cols-2 gap-2">
           <Button
-            variant="ghost"
+            variant={trend === 'up' ? 'ghost' : 'secondary'}
             onPress={() => setTrend('up')}
-            className={`min-h-11 bg-danger text-white hover:bg-danger ${trend === 'up' ? '' : 'opacity-55'}`}
+            className={`min-h-11 ${trend === 'up' ? 'bg-danger text-white hover:bg-danger' : ''}`}
           >
             <Icon icon="gravity-ui:arrow-up" aria-hidden="true" />
             上升
           </Button>
           <Button
-            variant="ghost"
+            variant={trend === 'down' ? 'ghost' : 'secondary'}
             onPress={() => setTrend('down')}
-            className={`min-h-11 bg-success text-white hover:bg-success ${trend === 'down' ? '' : 'opacity-55'}`}
+            className={`min-h-11 ${trend === 'down' ? 'bg-success text-white hover:bg-success' : ''}`}
           >
             <Icon icon="gravity-ui:arrow-down" aria-hidden="true" />
             下降
@@ -270,7 +270,7 @@ export default function SquareNineWebPage() {
                 variant="ghost"
                 onPress={() => setTrend('up')}
                 aria-label="上升趋势"
-                className={`rounded-full bg-danger text-white hover:bg-danger ${trend === 'up' ? '' : 'opacity-55'}`}
+                className={`rounded-full ${trend === 'up' ? 'bg-danger text-white hover:bg-danger' : 'text-muted'}`}
               >
                 <Icon icon="gravity-ui:arrow-up" />
               </Button>
@@ -280,7 +280,7 @@ export default function SquareNineWebPage() {
                 variant="ghost"
                 onPress={() => setTrend('down')}
                 aria-label="下降趋势"
-                className={`rounded-full bg-success text-white hover:bg-success ${trend === 'down' ? '' : 'opacity-55'}`}
+                className={`rounded-full ${trend === 'down' ? 'bg-success text-white hover:bg-success' : 'text-muted'}`}
               >
                 <Icon icon="gravity-ui:arrow-down" />
               </Button>
