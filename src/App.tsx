@@ -44,7 +44,7 @@ function BottomMenu() {
   const navigate = useNavigate()
 
   return (
-    <nav className="fixed bottom-[calc(0.75rem+env(safe-area-inset-bottom))] left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-md -translate-x-1/2 sm:w-auto sm:max-w-none sm:px-3">
+    <nav className="fixed bottom-[calc(1.5rem+env(safe-area-inset-bottom))] left-1/2 z-50 w-[calc(100%-1.5rem)] max-w-md -translate-x-1/2 sm:w-auto sm:max-w-none sm:px-3">
       <div className="flex items-center gap-1 rounded-full border border-separator bg-surface/95 p-1.5 shadow-surface backdrop-blur-xl sm:gap-2 sm:p-2">
         {menuItems.map((item) => {
           const active = location.pathname === item.path

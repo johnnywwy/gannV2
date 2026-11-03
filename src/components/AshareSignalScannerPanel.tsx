@@ -219,7 +219,7 @@ async function loadAllPerformancePages(performanceUrl: string) {
         url.searchParams.set("performanceDate", "all");
         url.searchParams.set("page", String(page));
         url.searchParams.set("pageSize", "500");
-        const response = await fetch(url, { cache: "no-store" });
+        const response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(20_000) });
         if (!response.ok) throw new Error(`盈亏跟踪接口失败：${response.status}`);
         const payload = await response.json();
         if (!payload?.success || !payload?.data?.pagination) throw new Error("盈亏跟踪格式不正确");
@@ -268,17 +268,20 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
     try {
       const url = new URL(SIGNALS_URL);
       url.searchParams.set("performanceDate", requestedPerformanceDate === "all" ? "latest" : requestedPerformanceDate);
-      const response = await fetch(url, { cache: "no-store" });
+      const response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(20_000) });
       if (!response.ok) throw new Error(`扫描结果接口失败：${response.status}`);
       const payload = await response.json();
       if (!payload?.success || !payload?.data) throw new Error("扫描结果格式不正确");
-      const nextSnapshot = requestedPerformanceDate === "all"
-        ? { ...payload.data, performance: await loadAllPerformancePages(PERFORMANCE_URL) }
-        : payload.data;
+      const nextSnapshot = payload.data;
       setSnapshot(nextSnapshot);
+      if (!quiet) setLoading(false);
       const selectedDate = nextSnapshot.performance?.selectedDate;
       setPerformanceDate(requestedPerformanceDate === "all" ? "all" : selectedDate || requestedPerformanceDate);
       setError(null);
+      if (requestedPerformanceDate === "all") {
+        const performance = await loadAllPerformancePages(PERFORMANCE_URL);
+        setSnapshot({ ...nextSnapshot, performance });
+      }
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "扫描结果加载失败");
     } finally {
