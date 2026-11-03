@@ -104,8 +104,8 @@ function BottomMenu() {
   const navigate = useNavigate()
 
   return (
-    <nav aria-label="主导航" className="fixed bottom-[calc(1.5rem+env(safe-area-inset-bottom))] left-1/2 z-50 w-[min(290px,calc(100%-2rem))] -translate-x-1/2">
-      <div className="grid grid-cols-3 gap-1 rounded-full border border-separator/60 bg-surface/85 p-1.5 shadow-lg backdrop-blur-2xl">
+    <nav aria-label="主导航" className="fixed bottom-[calc(1.5rem+env(safe-area-inset-bottom))] left-1/2 z-50 w-[min(252px,calc(100%-2rem))] -translate-x-1/2">
+      <div className="grid grid-cols-3 gap-1 rounded-full border border-separator/60 bg-surface/85 p-1 shadow-lg backdrop-blur-2xl">
         {menuItems.map((item) => {
           const active = location.pathname === item.path
           return (
@@ -115,11 +115,11 @@ function BottomMenu() {
               variant="ghost"
               onPress={() => navigate(item.path)}
               aria-current={active ? 'page' : undefined}
-              className={`relative !h-14 !w-full !min-w-0 !max-w-none rounded-full !p-0 ${active ? 'bg-default text-accent' : 'text-foreground'}`}
+              className={`relative !h-12 !w-full !min-w-0 !max-w-none rounded-full !p-0 ${active ? 'bg-default text-accent' : 'text-foreground'}`}
             >
-              <span className="absolute inset-0 grid grid-rows-[24px_16px] content-center justify-items-center gap-0.5">
-                <Icon icon={item.icon} className="block size-6 shrink-0" aria-hidden="true" />
-                <span className="block w-full text-center text-[11px] font-medium leading-4">{item.label}</span>
+              <span className="absolute inset-0 grid grid-rows-[20px_14px] content-center justify-items-center gap-0.5">
+                <Icon icon={item.icon} className="block size-5 shrink-0" aria-hidden="true" />
+                <span className="block w-full text-center text-[10px] font-medium leading-[14px]">{item.label}</span>
               </span>
             </Button>
           )
