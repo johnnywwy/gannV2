@@ -115,10 +115,12 @@ function BottomMenu() {
               variant="ghost"
               onPress={() => navigate(item.path)}
               aria-current={active ? 'page' : undefined}
-              className={`!h-14 !min-w-0 flex-col !gap-0.5 rounded-full !px-2 !py-1 ${active ? 'bg-default text-accent' : 'text-foreground'}`}
+              className={`relative !h-14 !w-full !min-w-0 !max-w-none rounded-full !p-0 ${active ? 'bg-default text-accent' : 'text-foreground'}`}
             >
-              <Icon icon={item.icon} className="size-6" aria-hidden="true" />
-              <span className="text-[11px] font-medium leading-4">{item.label}</span>
+              <span className="absolute inset-0 grid grid-rows-[24px_16px] content-center justify-items-center gap-0.5">
+                <Icon icon={item.icon} className="block size-6 shrink-0" aria-hidden="true" />
+                <span className="block w-full text-center text-[11px] font-medium leading-4">{item.label}</span>
+              </span>
             </Button>
           )
         })}
