@@ -331,10 +331,10 @@ export default function SquareNineWebPage() {
               className="mt-2"
             >
               <Label>自定义行列</Label>
-              <NumberField.Group>
-                <NumberField.DecrementButton />
-                <NumberField.Input inputMode="numeric" />
-                <NumberField.IncrementButton />
+              <NumberField.Group className="h-11">
+                <NumberField.DecrementButton className="!size-11 !min-h-11 !min-w-11 shrink-0 p-0" />
+                <NumberField.Input className="min-w-0 flex-1 text-center tabular-nums" inputMode="numeric" />
+                <NumberField.IncrementButton className="!size-11 !min-h-11 !min-w-11 shrink-0 p-0" />
               </NumberField.Group>
             </NumberField>
           </div>
@@ -357,10 +357,13 @@ export default function SquareNineWebPage() {
               className="min-w-0 flex-1"
             >
               <Label className="sr-only">定位数值</Label>
-              <NumberField.Group>
-                <NumberField.DecrementButton />
-                <NumberField.Input onKeyDown={(event) => event.key === 'Enter' && locate()} />
-                <NumberField.IncrementButton />
+              <NumberField.Group className="h-11">
+                <NumberField.DecrementButton className="!size-11 !min-h-11 !min-w-11 shrink-0 p-0" />
+                <NumberField.Input
+                  className="min-w-0 flex-1 text-center tabular-nums"
+                  onKeyDown={(event) => event.key === 'Enter' && locate()}
+                />
+                <NumberField.IncrementButton className="!size-11 !min-h-11 !min-w-11 shrink-0 p-0" />
               </NumberField.Group>
             </NumberField>
             <Button
