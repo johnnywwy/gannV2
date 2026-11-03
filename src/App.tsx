@@ -8,7 +8,15 @@ import SquareNineWebPage from './platforms/web/SquareNineWebPage'
 import StatisticsPage from './components/StatisticsPage'
 
 const menuItems = [
-  { path: '/', label: '九方图', icon: 'gravity-ui:grid' },
+  {
+    path: '/',
+    label: '九方图',
+    icon: {
+      width: 24,
+      height: 24,
+      body: '<g fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="3" width="18" height="18" rx="3"/><path d="M9 3v18M15 3v18M3 9h18M3 15h18"/></g>',
+    },
+  },
   { path: '/kline', label: 'K线图', icon: 'gravity-ui:chart-column' },
   { path: '/backtest', label: '回溯测试', icon: 'gravity-ui:flask' },
 ]
