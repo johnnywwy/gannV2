@@ -13,7 +13,7 @@ import {
 
 const MOBILE_QUERY = '(max-width: 767px)'
 const DESKTOP_LOOPS = [8, 12, 16]
-const MOBILE_LOOPS = [3, 4, 5]
+const MOBILE_LOOPS = [3, 4, 5, 6]
 const STORAGE_KEY = 'gann-square-nine-layout-v2'
 
 type LayoutState = {
@@ -291,7 +291,7 @@ export default function SquareNineWebPage() {
 
           <div className="border-t border-separator p-3">
             <div
-              className="grid grid-cols-3 gap-1 rounded-2xl bg-surface-secondary p-1"
+              className="grid grid-cols-4 gap-1 rounded-2xl bg-surface-secondary p-1"
               role="group"
               aria-label="九方图行列密度"
             >
