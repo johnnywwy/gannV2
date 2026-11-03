@@ -6,8 +6,10 @@ import BacktestComingSoonPage from './components/BacktestComingSoonPage'
 import KLineChartPage from './components/KLineChartPage'
 import SquareNineWebPage from './platforms/web/SquareNineWebPage'
 import StatisticsPage from './components/StatisticsPage'
+import WatchlistPage from './components/WatchlistPage'
 
 const menuItems = [
+  { path: '/watchlist', label: '自选', icon: { width: 24, height: 24, body: '<path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-3-5.6 3 1.1-6.2L3 9.6l6.2-.9Z"/>' } },
   {
     path: '/',
     label: '九方图',
@@ -93,6 +95,7 @@ function AnimatedRoutes() {
         <Route path="/kline" element={<KLineChartPage />} />
         <Route path="/backtest" element={<BacktestComingSoonPage />} />
         <Route path="/statistics" element={<StatisticsPage />} />
+        <Route path="/watchlist" element={<WatchlistPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </div>
@@ -105,7 +108,7 @@ function BottomMenu() {
 
   return (
     <nav aria-label="主导航" className="fixed bottom-[calc(1.5rem+env(safe-area-inset-bottom))] left-1/2 z-50 w-[min(252px,calc(100%-2rem))] -translate-x-1/2">
-      <div className="grid grid-cols-3 gap-1 rounded-full border border-separator/60 bg-surface/85 p-1 shadow-lg backdrop-blur-2xl">
+      <div className="grid grid-cols-4 gap-1 rounded-full border border-separator/60 bg-surface/85 p-1 shadow-lg backdrop-blur-2xl">
         {menuItems.map((item) => {
           const active = location.pathname === item.path
           return (
