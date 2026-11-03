@@ -342,10 +342,9 @@ export default function SquareNineWebPage() {
 
         <div className="mt-3 grid gap-3">
           <section
-            className="grid min-h-16 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-2xl border border-separator bg-surface px-4 py-3 shadow-surface"
+            className="grid min-h-16 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-2xl border border-separator bg-surface p-3 shadow-surface"
             aria-label="图表参数"
           >
-            <span className="whitespace-nowrap text-sm font-semibold">定位数值</span>
             <NumberField
               value={searchValue}
               minValue={1}
@@ -371,7 +370,7 @@ export default function SquareNineWebPage() {
               variant="secondary"
               onPress={locate}
               aria-label="定位到九方图"
-              className="min-h-10 rounded-xl px-4 font-semibold"
+              className="h-11 min-h-11 rounded-xl px-4 font-semibold"
             >
               定位
             </Button>
