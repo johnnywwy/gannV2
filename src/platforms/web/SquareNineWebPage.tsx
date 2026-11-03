@@ -139,17 +139,17 @@ export default function SquareNineWebPage() {
         </div>
         <div className="grid grid-cols-2 gap-2">
           <Button
-            variant={trend === 'up' ? 'primary' : 'secondary'}
+            variant="ghost"
             onPress={() => setTrend('up')}
-            className="min-h-11"
+            className={`min-h-11 ${trend === 'up' ? 'bg-danger text-danger-foreground' : 'bg-surface-secondary text-muted'}`}
           >
             <Icon icon="gravity-ui:arrow-up" aria-hidden="true" />
             上升
           </Button>
           <Button
-            variant={trend === 'down' ? 'primary' : 'secondary'}
+            variant="ghost"
             onPress={() => setTrend('down')}
-            className="min-h-11"
+            className={`min-h-11 ${trend === 'down' ? 'bg-success text-success-foreground' : 'bg-surface-secondary text-muted'}`}
           >
             <Icon icon="gravity-ui:arrow-down" aria-hidden="true" />
             下降
@@ -267,20 +267,20 @@ export default function SquareNineWebPage() {
               <Button
                 isIconOnly
                 size="sm"
-                variant={trend === 'up' ? 'primary' : 'ghost'}
+                variant="ghost"
                 onPress={() => setTrend('up')}
                 aria-label="上升趋势"
-                className="rounded-full"
+                className={`rounded-full ${trend === 'up' ? 'bg-danger text-danger-foreground' : 'text-muted'}`}
               >
                 <Icon icon="gravity-ui:arrow-up" />
               </Button>
               <Button
                 isIconOnly
                 size="sm"
-                variant={trend === 'down' ? 'primary' : 'ghost'}
+                variant="ghost"
                 onPress={() => setTrend('down')}
                 aria-label="下降趋势"
-                className="rounded-full"
+                className={`rounded-full ${trend === 'down' ? 'bg-success text-success-foreground' : 'text-muted'}`}
               >
                 <Icon icon="gravity-ui:arrow-down" />
               </Button>
