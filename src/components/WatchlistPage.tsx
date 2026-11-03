@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Button } from '@heroui/react'
+import { Button, Input, Label, TextField } from '@heroui/react'
 import { saveKLineActiveSymbol } from '../utils/kLineStore'
 
 type Stock = { id: number; symbol: string; name: string }
 type Group = { id: number; name: string; stocks: Stock[] }
+type SearchStock = { symbol: string; name: string; nameCn?: string; nameEn?: string }
 const API = 'https://n1-longbridge.johnnywwy.com/api/local-watchlist'
 
 export default function WatchlistPage() {
@@ -13,6 +14,13 @@ export default function WatchlistPage() {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [editing, setEditing] = useState(false)
+  const [adding, setAdding] = useState(false)
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<SearchStock[]>([])
+  const [searching, setSearching] = useState(false)
+  const [searchError, setSearchError] = useState('')
+  const [groupEditor, setGroupEditor] = useState<'new' | number | null>(null)
+  const [groupName, setGroupName] = useState('')
   const [quotes, setQuotes] = useState<Record<string, { price: string; previousClose: string }>>({})
   const navigate = useNavigate()
   const group = groups.find(item => item.id === selected) ?? groups[0]
@@ -26,6 +34,20 @@ export default function WatchlistPage() {
     try { setGroups((await request()).data); setError('') } catch (e) { setError(String(e)) }
   }
   useEffect(() => { void request().then(data => setGroups(data.data)).catch(e => setError(String(e))) }, [])
+  useEffect(() => {
+    if (!adding || !query.trim()) return
+    const controller = new AbortController()
+    const timer = setTimeout(() => {
+      setSearching(true)
+      setSearchError('')
+      void fetch(`https://n1-longbridge.johnnywwy.com/api/securities/search?q=${encodeURIComponent(query.trim())}&limit=20`, { signal: controller.signal })
+        .then(async response => { const payload = await response.json(); if (!response.ok || !payload.success) throw new Error(payload.message || '搜索失败'); return payload.data as SearchStock[] })
+        .then(items => { if (!controller.signal.aborted) setResults(items.filter(item => /\.(SH|SZ|US)$/.test(item.symbol))) })
+        .catch(e => { if (!controller.signal.aborted) setSearchError(String(e)) })
+        .finally(() => { if (!controller.signal.aborted) setSearching(false) })
+    }, 300)
+    return () => { clearTimeout(timer); controller.abort() }
+  }, [adding, query])
   useEffect(() => {
     const refresh = () => { void request('/quotes').then(result => setQuotes(Object.fromEntries(result.data.map((quote: { symbol: string; price: string; previousClose: string }) => [quote.symbol, quote])))).catch(() => {}) }
     refresh()
@@ -44,14 +66,23 @@ export default function WatchlistPage() {
     void change('/order', 'PUT', { type, groupId: group?.id, ids: items.map(item => item.id) })
   }
   return <main className="mx-auto min-h-screen max-w-4xl bg-background px-4 pb-36 pt-6 text-foreground">
-    <header className="mb-5 flex items-center justify-between"><h1 className="text-2xl font-semibold">自选</h1><Button size="sm" variant="secondary" onPress={() => { const name = prompt('新分组名称'); if (name) void change('/groups', 'POST', { name }) }}>新建分组</Button></header>
+    <header className="mb-5 flex items-center justify-between"><h1 className="text-2xl font-semibold">自选</h1><Button size="sm" variant="secondary" onPress={() => { setGroupEditor('new'); setGroupName('') }}>新建分组</Button></header>
+    {groupEditor !== null && <form className="mb-4 flex items-end gap-2" onSubmit={event => { event.preventDefault(); if (!groupName.trim()) return; void change(groupEditor === 'new' ? '/groups' : `/groups/${groupEditor}`, groupEditor === 'new' ? 'POST' : 'PUT', { name: groupName.trim() }); setGroupEditor(null) }}><TextField className="min-w-0 flex-1" value={groupName} onChange={setGroupName}><Label>分组名称</Label><Input autoFocus maxLength={60} placeholder="输入分组名称" /></TextField><Button type="submit" size="sm" isDisabled={busy || !groupName.trim()}>保存</Button><Button size="sm" variant="ghost" onPress={() => setGroupEditor(null)}>取消</Button></form>}
     <div className="mb-3 flex items-center justify-between"><p className="text-xs text-muted">共享自选 · 行情来源：长桥</p><Button size="sm" variant="ghost" onPress={() => setEditing(!editing)}>{editing ? '完成' : '管理'}</Button></div>
     {error && <p role="alert" className="mb-3 text-danger">{error}</p>}
     <div className="mb-4 flex gap-2 overflow-x-auto" aria-label="自选分组">{groups.map(item => <Button key={item.id} aria-pressed={group?.id === item.id} size="sm" variant={group?.id === item.id ? 'primary' : 'ghost'} onPress={() => setSelected(item.id)}>{item.name}</Button>)}</div>
     {group && <>
+      <Button size="sm" className="mb-3" onPress={() => { setAdding(!adding); setQuery(''); setResults([]); setSearchError('') }}>{adding ? '收起搜索' : '＋ 添加股票'}</Button>
+      {adding && <section className="mb-4 rounded-2xl border border-separator bg-surface p-3">
+        <TextField value={query} onChange={value => { setQuery(value); setResults([]) }}><Label>搜索股票</Label><Input autoFocus placeholder="输入代码或名称，如 600519、茅台、AAPL" /></TextField>
+        <p className="mt-2 text-xs text-muted">添加到「{group.name}」· 选择结果即可添加</p>
+        {searching && <p role="status" className="py-3 text-sm text-muted">正在搜索…</p>}
+        {searchError && <p role="alert" className="py-3 text-sm text-danger">{searchError}</p>}
+        {!searching && query.trim() && !results.length && !searchError && <p className="py-3 text-sm text-muted">未找到匹配股票</p>}
+        <div className="max-h-72 overflow-y-auto">{results.map(stock => { const exists = group.stocks.some(item => item.symbol === stock.symbol); const name = stock.nameCn || stock.name || stock.nameEn || stock.symbol; return <Button key={stock.symbol} fullWidth variant="ghost" isDisabled={busy || exists} className="!h-auto min-h-14 justify-between rounded-lg py-2" onPress={() => void change(`/groups/${group.id}/stocks`, 'POST', { symbol: stock.symbol, name })}><span className="min-w-0 text-left"><span className="block truncate font-medium">{name}</span><span className="block text-xs text-muted">{stock.symbol}</span></span><span className="text-xs text-accent">{exists ? '已添加' : '添加'}</span></Button> })}</div>
+      </section>}
       <div className={`mb-4 flex flex-wrap gap-2 ${editing ? '' : 'hidden'}`}>
-        <Button size="sm" isDisabled={busy} onPress={() => { const symbol = prompt('股票代码，例如 600519.SH / AAPL.US'); if (!symbol) return; const name = prompt('股票名称'); if (name) void change(`/groups/${group.id}/stocks`, 'POST', { symbol, name }) }}>添加股票</Button>
-        <Button size="sm" variant="ghost" onPress={() => { const name = prompt('分组名称', group.name); if (name) void change(`/groups/${group.id}`, 'PUT', { name }) }}>改名</Button>
+        <Button size="sm" variant="ghost" onPress={() => { setGroupEditor(group.id); setGroupName(group.name) }}>改名</Button>
         <Button size="sm" variant="ghost" onPress={() => move(groups.indexOf(group), -1, 'groups')}>分组前移</Button>
         <Button size="sm" variant="ghost" onPress={() => move(groups.indexOf(group), 1, 'groups')}>分组后移</Button>
         <Button size="sm" variant="ghost" onPress={() => { if (confirm(`删除“${group.name}”及其中自选？`)) void change(`/groups/${group.id}`, 'DELETE') }}>删除分组</Button>
