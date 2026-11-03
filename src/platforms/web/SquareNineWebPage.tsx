@@ -332,9 +332,9 @@ export default function SquareNineWebPage() {
             >
               <Label>自定义行列</Label>
               <NumberField.Group className="h-11">
-                <NumberField.DecrementButton className="!size-11 !min-h-11 !min-w-11 shrink-0 p-0" />
+                <NumberField.DecrementButton className="!size-11 !min-h-11 !min-w-11 shrink-0 p-0 [&>svg]:translate-x-[0.5px]" />
                 <NumberField.Input className="min-w-0 flex-1 text-center tabular-nums" inputMode="numeric" />
-                <NumberField.IncrementButton className="!size-11 !min-h-11 !min-w-11 shrink-0 p-0" />
+                <NumberField.IncrementButton className="!size-11 !min-h-11 !min-w-11 shrink-0 p-0 [&>svg]:translate-x-[-0.5px]" />
               </NumberField.Group>
             </NumberField>
           </div>
@@ -358,12 +358,12 @@ export default function SquareNineWebPage() {
             >
               <Label className="sr-only">定位数值</Label>
               <NumberField.Group className="h-11">
-                <NumberField.DecrementButton className="!size-11 !min-h-11 !min-w-11 shrink-0 p-0" />
+                <NumberField.DecrementButton className="!size-11 !min-h-11 !min-w-11 shrink-0 p-0 [&>svg]:translate-x-[0.5px]" />
                 <NumberField.Input
                   className="min-w-0 flex-1 text-center tabular-nums"
                   onKeyDown={(event) => event.key === 'Enter' && locate()}
                 />
-                <NumberField.IncrementButton className="!size-11 !min-h-11 !min-w-11 shrink-0 p-0" />
+                <NumberField.IncrementButton className="!size-11 !min-h-11 !min-w-11 shrink-0 p-0 [&>svg]:translate-x-[-0.5px]" />
               </NumberField.Group>
             </NumberField>
             <Button
