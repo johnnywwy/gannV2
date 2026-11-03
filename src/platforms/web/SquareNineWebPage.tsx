@@ -69,12 +69,12 @@ export default function SquareNineWebPage() {
 
   const cellSize = useMemo(() => {
     if (!autoFit) return manualCellSize
-    const horizontalInset = isMobile ? 24 : 0
     const available = Math.max(
       220,
-      Math.min(viewport.width - horizontalInset, (viewport.height || viewport.width) - horizontalInset),
+      Math.min(viewport.width, viewport.height || viewport.width),
     )
-    return Math.max(isMobile ? 22 : 12, Math.floor(available / size))
+    if (isMobile) return Math.max(22, available / size)
+    return Math.max(12, Math.floor(available / size))
   }, [autoFit, isMobile, manualCellSize, size, viewport])
   const canvasSize = size * cellSize
 
@@ -237,7 +237,7 @@ export default function SquareNineWebPage() {
       ref={canvasRef}
       width={canvasSize}
       height={canvasSize}
-      className="block max-w-none touch-manipulation rounded-xl shadow-surface"
+      className={`block max-w-none touch-manipulation ${isMobile ? '' : 'rounded-xl shadow-surface'}`}
       style={{ width: canvasSize, height: canvasSize }}
       onPointerUp={(event) => selectFromCanvas(event.clientX, event.clientY)}
       aria-label={`${size} 乘 ${size} 江恩九方图，当前选择 ${effectiveSelectedValue}`}
@@ -285,7 +285,7 @@ export default function SquareNineWebPage() {
             </div>
           </div>
 
-          <div ref={viewportRef} className="aspect-square w-full overflow-auto bg-surface-secondary p-3">
+          <div ref={viewportRef} className="aspect-square w-full overflow-hidden bg-surface-secondary">
             <div className="flex min-h-full min-w-full items-center justify-center">{chart}</div>
           </div>
 
@@ -306,16 +306,37 @@ export default function SquareNineWebPage() {
                     onPress={() => setMobileLoop(preset)}
                     aria-label={`设置为 ${dimension} 乘 ${dimension} 行列`}
                     aria-pressed={active}
-                    className={`min-h-10 rounded-xl px-2 transition-shadow ${
+                    className={`relative min-h-10 w-full min-w-0 rounded-xl !px-0 transition-shadow ${
                       active ? 'bg-surface font-semibold shadow-sm ring-1 ring-separator' : 'text-muted'
                     }`}
                   >
-                    {active && <Icon icon="gravity-ui:check" className="size-3.5" aria-hidden="true" />}
-                    {dimension}×{dimension}
+                    <span className="absolute inset-0 grid place-items-center text-center tabular-nums">
+                      {dimension}×{dimension}
+                    </span>
                   </Button>
                 )
               })}
             </div>
+            <NumberField
+              value={size}
+              minValue={3}
+              maxValue={99}
+              step={2}
+              onChange={(value) => {
+                const dimension = normalizeOddDimension(value ?? size)
+                setMobileLoop((dimension - 1) / 2)
+              }}
+              fullWidth
+              variant="secondary"
+              className="mt-2"
+            >
+              <Label>自定义行列</Label>
+              <NumberField.Group>
+                <NumberField.DecrementButton />
+                <NumberField.Input inputMode="numeric" />
+                <NumberField.IncrementButton />
+              </NumberField.Group>
+            </NumberField>
           </div>
         </section>
 
@@ -526,6 +547,11 @@ function drawSquareNine(
 
 function normalizeLoop(value: number) {
   return clamp(Math.round(Number(value) || 1), 1, 99)
+}
+
+function normalizeOddDimension(value: number) {
+  const dimension = clamp(Math.round(Number(value) || 3), 3, 99)
+  return dimension % 2 === 0 ? Math.min(99, dimension + 1) : dimension
 }
 
 function clamp(value: number, min: number, max: number) {
