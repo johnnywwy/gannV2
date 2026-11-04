@@ -1042,6 +1042,7 @@ function KLineChartPage({ version = 1 }: { version?: 1 | 2 }) {
           },
         },
         candle: {
+          ...(version === 2 ? { tooltip: { showRule: 'none' as const } } : {}),
           bar: {
             upColor: "#f23645",
             downColor: "#089981",
@@ -1065,6 +1066,14 @@ function KLineChartPage({ version = 1 }: { version?: 1 | 2 }) {
             },
           },
         },
+        ...(version === 2 ? {
+          indicator: {
+            tooltip: {
+              showRule: 'follow_cross' as const,
+              title: { showName: true, showParams: false },
+            },
+          },
+        } : {}),
         crosshair: {
           horizontal: {
             line: {
