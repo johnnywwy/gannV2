@@ -814,6 +814,7 @@ function KLineChartPage({ version = 1 }: { version?: 1 | 2 }) {
   const [activeSymbol, setActiveSymbol] = useState<WatchSymbol>(() => ({
     ...defaultSymbol,
     ticker: readKLineActiveSymbol()?.ticker ?? defaultSymbol.ticker,
+    name: readKLineActiveSymbol()?.ticker && readKLineActiveSymbol()?.ticker !== defaultSymbol.ticker ? '' : defaultSymbol.name,
   }));
   const initialChartSymbolRef = useRef<WatchSymbol | null>(null);
   const [watchSymbols, setWatchSymbols] =
@@ -1013,7 +1014,10 @@ function KLineChartPage({ version = 1 }: { version?: 1 | 2 }) {
     if (!host) return;
 
     const chart = init(host, {
-      layout: [
+      layout: version === 2 ? [
+        { type: 'candle', options: { id: 'candle_pane', minHeight: 220 } },
+        { type: 'xAxis' },
+      ] : [
         { type: "candle", options: { id: "candle_pane" } },
         {
           type: "indicator",
@@ -1198,7 +1202,7 @@ function KLineChartPage({ version = 1 }: { version?: 1 | 2 }) {
     chart.createIndicator("MA", true, { id: "candle_pane" });
     chart.setMaxOffsetLeftDistance(MAX_SCROLL_DISTANCE);
     chart.setMaxOffsetRightDistance(KLINE_MAX_RIGHT_OFFSET);
-    chart.setOffsetRightDistance(KLINE_RIGHT_OFFSET);
+    chart.setOffsetRightDistance(version === 2 ? 12 : KLINE_RIGHT_OFFSET);
 
     const observer = new ResizeObserver(() => {
       chart.resize();
@@ -1335,6 +1339,7 @@ function KLineChartPage({ version = 1 }: { version?: 1 | 2 }) {
           minHeight: version === 2 ? 40 : 80,
         });
       });
+    if (version === 2) chart.setPaneOptions({ id: 'candle_pane', minHeight: 220 });
     renderNtpSignalOverlays(
       chart,
       marketBarsRef.current,
@@ -1512,7 +1517,7 @@ function KLineChartPage({ version = 1 }: { version?: 1 | 2 }) {
         </section>
         <div className="flex items-center gap-1 overflow-x-auto px-3 py-2" aria-label="K线周期">{['1d','1w','1M','1q','1m','5m','15m'].map(value => <HeroButton key={value} size="sm" variant={periodValue === value ? 'secondary' : 'ghost'} className="shrink-0" onPress={() => setPeriodValue(value)}>{periodOptions.find(option => option.value === value)?.label}{['1d','1w','1M','1q'].includes(value) ? 'K' : ''}</HeroButton>)}</div>
         <div className="flex flex-wrap items-center gap-1 border-b border-separator px-3 pb-2"><span className="mr-1 text-xs text-muted">主图</span>{['MA','BOLL'].map(value => <HeroButton key={value} size="sm" variant={mainIndicator === value ? 'secondary' : 'ghost'} onPress={() => setMainIndicator(value)}>{value}</HeroButton>)}<span className="ml-2 text-xs text-muted">副图</span>{['LMACD','RSI','VOL'].map(value => <HeroButton key={value} size="sm" variant={selectedPaneIndicators.includes(value) ? 'secondary' : 'ghost'} onPress={() => setSelectedPaneIndicators(previous => previous.includes(value) ? previous.filter(item => item !== value) : [...previous,value])}>{value}</HeroButton>)}</div>
-        <div className="relative mx-auto aspect-[588/600] w-full max-w-[720px] bg-white" onClick={handleChartClick} onTouchStart={handleChartTouch} onTouchMove={handleChartTouch}>
+        <div className="relative mx-auto h-[560px] w-full max-w-[720px] bg-white sm:h-[680px]" onClick={handleChartClick} onTouchStart={handleChartTouch} onTouchMove={handleChartTouch}>
           <div ref={chartHostRef} className="h-full w-full" />
           {loadingCount > 0 && <div role="status" className="pointer-events-none absolute right-3 top-3 rounded-lg bg-surface/95 px-3 py-2 text-xs shadow-sm">{loadingText}</div>}
           {selectedTurningPoint && <TurningPointActionPopup point={selectedTurningPoint} onClose={() => setSelectedTurningPoint(null)} onTrendSelect={handleTrendSelect} />}
