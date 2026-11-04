@@ -674,7 +674,7 @@ const lmacdSignalOverlay: OverlayTemplate<LmacdSignalData> = {
   needDefaultPointFigure: false,
   needDefaultXAxisFigure: false,
   needDefaultYAxisFigure: false,
-  createPointFigures: ({ overlay, coordinates }) => {
+  createPointFigures: ({ overlay, coordinates, bounding }) => {
     const coordinate = coordinates[0];
     const data = overlay.extendData as LmacdSignalData;
     const isBottom =
@@ -708,8 +708,10 @@ const lmacdSignalOverlay: OverlayTemplate<LmacdSignalData> = {
             backgroundColor: "rgba(242, 54, 69, 0.14)",
             borderColor: "rgba(242, 54, 69, 0.72)",
           };
-    const labelY =
-      coordinate.y + (isBottom ? 20 + data.slot * 22 : -20 - data.slot * 22);
+    const labelY = Math.max(12, Math.min(bounding.height - 12,
+      coordinate.y + (isBottom ? 16 + data.slot * 16 : -16 - data.slot * 16)));
+    const halfWidth = Math.min(bounding.width / 2, data.text.length * 5 + 5);
+    const labelX = Math.max(halfWidth, Math.min(bounding.width - halfWidth, coordinate.x));
 
     return [
       {
@@ -717,7 +719,7 @@ const lmacdSignalOverlay: OverlayTemplate<LmacdSignalData> = {
         attrs: {
           coordinates: [
             { x: coordinate.x, y: coordinate.y },
-            { x: coordinate.x, y: labelY },
+            { x: labelX, y: labelY },
           ],
         },
         styles: {
@@ -731,7 +733,7 @@ const lmacdSignalOverlay: OverlayTemplate<LmacdSignalData> = {
       {
         type: "text",
         attrs: {
-          x: coordinate.x,
+          x: labelX,
           y: labelY,
           text: data.text,
           align: "center",
@@ -739,16 +741,16 @@ const lmacdSignalOverlay: OverlayTemplate<LmacdSignalData> = {
         },
         styles: {
           color: theme.color,
-          size: 12,
-          weight: "700",
+          size: 10,
+          weight: "500",
           backgroundColor: theme.backgroundColor,
           borderColor: theme.borderColor,
           borderSize: 1,
-          borderRadius: 6,
-          paddingLeft: 6,
-          paddingRight: 6,
-          paddingTop: 3,
-          paddingBottom: 3,
+          borderRadius: 2,
+          paddingLeft: 3,
+          paddingRight: 3,
+          paddingTop: 1,
+          paddingBottom: 1,
         },
         ignoreEvent: true,
       },
