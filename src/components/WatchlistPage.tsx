@@ -65,14 +65,13 @@ export default function WatchlistPage() {
     ;[items[index], items[next]] = [items[next], items[index]]
     void change('/order', 'PUT', { type, groupId: group?.id, ids: items.map(item => item.id) })
   }
-  return <main className="mx-auto min-h-screen max-w-4xl bg-background px-4 pb-36 pt-6 text-foreground">
-    <header className="mb-5 flex items-center justify-between"><h1 className="text-2xl font-semibold">自选</h1><Button size="sm" variant="secondary" onPress={() => { setGroupEditor('new'); setGroupName('') }}>新建分组</Button></header>
+  return <main className="mx-auto min-h-screen max-w-4xl bg-background px-3 pb-36 pt-4 text-foreground sm:px-6">
+    <header className="mb-3 flex h-12 items-center justify-between"><h1 className="flex items-center gap-2 text-2xl font-semibold"><span className="text-accent" aria-hidden="true">♥</span>自选</h1><div className="flex gap-1"><Button size="sm" variant="ghost" aria-label="添加股票" isDisabled={!group} onPress={() => { setAdding(!adding); setQuery(''); setResults([]); setSearchError('') }}>＋ 添加</Button><Button size="sm" variant="ghost" onPress={() => setEditing(!editing)}>{editing ? '完成' : '管理'}</Button></div></header>
     {groupEditor !== null && <form className="mb-4 flex items-end gap-2" onSubmit={event => { event.preventDefault(); if (!groupName.trim()) return; void change(groupEditor === 'new' ? '/groups' : `/groups/${groupEditor}`, groupEditor === 'new' ? 'POST' : 'PUT', { name: groupName.trim() }); setGroupEditor(null) }}><TextField className="min-w-0 flex-1" value={groupName} onChange={setGroupName}><Label>分组名称</Label><Input autoFocus maxLength={60} placeholder="输入分组名称" /></TextField><Button type="submit" size="sm" isDisabled={busy || !groupName.trim()}>保存</Button><Button size="sm" variant="ghost" onPress={() => setGroupEditor(null)}>取消</Button></form>}
-    <div className="mb-3 flex items-center justify-between"><p className="text-xs text-muted">共享自选 · 行情来源：长桥</p><Button size="sm" variant="ghost" onPress={() => setEditing(!editing)}>{editing ? '完成' : '管理'}</Button></div>
+    {editing && <Button size="sm" variant="secondary" className="mb-3" onPress={() => { setGroupEditor('new'); setGroupName('') }}>新建分组</Button>}
     {error && <p role="alert" className="mb-3 text-danger">{error}</p>}
-    <div className="mb-4 flex gap-2 overflow-x-auto" aria-label="自选分组">{groups.map(item => <Button key={item.id} aria-pressed={group?.id === item.id} size="sm" variant={group?.id === item.id ? 'primary' : 'ghost'} onPress={() => setSelected(item.id)}>{item.name}</Button>)}</div>
+    <div className="mb-1 flex gap-5 overflow-x-auto border-b border-separator" aria-label="自选分组">{groups.map(item => <Button key={item.id} aria-pressed={group?.id === item.id} variant="ghost" className={`relative !h-12 shrink-0 !min-w-0 rounded-none !px-0 text-base ${group?.id === item.id ? 'font-semibold text-foreground after:absolute after:inset-x-0 after:bottom-0 after:h-[3px] after:rounded-full after:bg-accent' : 'text-muted'}`} onPress={() => { setSelected(item.id); setAdding(false) }}>{item.name}</Button>)}</div>
     {group && <>
-      <Button size="sm" className="mb-3" onPress={() => { setAdding(!adding); setQuery(''); setResults([]); setSearchError('') }}>{adding ? '收起搜索' : '＋ 添加股票'}</Button>
       {adding && <section className="mb-4 rounded-2xl border border-separator bg-surface p-3">
         <TextField value={query} onChange={value => { setQuery(value); setResults([]) }}><Label>搜索股票</Label><Input autoFocus placeholder="输入代码或名称，如 600519、茅台、AAPL" /></TextField>
         <p className="mt-2 text-xs text-muted">添加到「{group.name}」· 选择结果即可添加</p>
@@ -87,15 +86,16 @@ export default function WatchlistPage() {
         <Button size="sm" variant="ghost" onPress={() => move(groups.indexOf(group), 1, 'groups')}>分组后移</Button>
         <Button size="sm" variant="ghost" onPress={() => { if (confirm(`删除“${group.name}”及其中自选？`)) void change(`/groups/${group.id}`, 'DELETE') }}>删除分组</Button>
       </div>
-      <div className="mb-1 grid grid-cols-[1fr_90px_80px] gap-2 border-b border-separator py-2 text-right text-xs text-muted"><span className="text-left">名称 / 代码</span><span>价格</span><span>涨跌幅</span></div>
-      <div>{group.stocks.map((stock, index) => <div key={stock.id} className="flex items-center gap-2 border-b border-separator py-4 last:border-0">
-        <button className="min-w-0 flex-1 text-left" onClick={() => { saveKLineActiveSymbol({ ticker: stock.symbol }); navigate('/kline') }}><span className="block font-semibold">{stock.name}</span><span className="text-xs text-muted">{stock.symbol}</span></button>
-        {!editing && <><span className="w-[90px] text-right font-medium tabular-nums">{quotes[stock.symbol] ? Number(quotes[stock.symbol].price).toFixed(3) : '—'}</span><span className={`w-20 rounded-md px-1 py-2 text-center text-sm tabular-nums ${quotes[stock.symbol] ? Number(quotes[stock.symbol].price) >= Number(quotes[stock.symbol].previousClose) ? 'bg-danger text-white' : 'bg-success text-white' : 'text-muted'}`}>{quotes[stock.symbol] && Number(quotes[stock.symbol].previousClose) > 0 ? `${((Number(quotes[stock.symbol].price) / Number(quotes[stock.symbol].previousClose) - 1) * 100).toFixed(2)}%` : '暂无行情'}</span></>}
+      <div className="grid grid-cols-[minmax(0,1fr)_88px_80px] gap-2 border-b border-separator py-3 text-right text-xs text-muted"><span className="text-left">名称 / 代码</span><span>价格</span><span>涨跌幅</span></div>
+      <div>{group.stocks.map((stock, index) => <div key={stock.id} className={`${editing ? 'flex' : 'grid grid-cols-[minmax(0,1fr)_88px_80px]'} min-h-[76px] items-center gap-2 border-b border-separator/60 py-3`}>
+        <button className="min-w-0 flex-1 text-left" onClick={() => { saveKLineActiveSymbol({ ticker: stock.symbol }); navigate('/kline') }}><span className="block truncate text-[17px] font-medium leading-6">{stock.name}</span><span className="mt-1 block text-[13px] leading-5 text-muted">{stock.symbol.replace(/\.(SH|SZ|US)$/, '')}<span className="ml-1.5 text-[10px]">{stock.symbol.endsWith('.US') ? '美股' : 'A股'}</span></span></button>
+        {!editing && <><span className={`text-right text-[18px] font-medium tabular-nums ${quotes[stock.symbol] ? Number(quotes[stock.symbol].price) >= Number(quotes[stock.symbol].previousClose) ? 'text-danger' : 'text-success' : 'text-muted'}`}>{quotes[stock.symbol] ? Number(quotes[stock.symbol].price).toFixed(3) : '—'}</span><span className={`rounded px-1 py-1.5 text-center text-[15px] font-medium tabular-nums ${quotes[stock.symbol] ? Number(quotes[stock.symbol].price) >= Number(quotes[stock.symbol].previousClose) ? 'bg-danger text-white' : 'bg-success text-white' : 'text-muted'}`}>{quotes[stock.symbol] && Number(quotes[stock.symbol].previousClose) > 0 ? `${Number(quotes[stock.symbol].price) >= Number(quotes[stock.symbol].previousClose) ? '+' : ''}${((Number(quotes[stock.symbol].price) / Number(quotes[stock.symbol].previousClose) - 1) * 100).toFixed(2)}%` : '暂无行情'}</span></>}
         {editing && <><Button size="sm" isIconOnly aria-label={`${stock.name}上移`} isDisabled={busy || index === 0} variant="ghost" onPress={() => move(index, -1, 'stocks')}>↑</Button>
         <Button size="sm" isIconOnly aria-label={`${stock.name}下移`} isDisabled={busy || index === group.stocks.length - 1} variant="ghost" onPress={() => move(index, 1, 'stocks')}>↓</Button>
         <Button size="sm" variant="ghost" isDisabled={busy} onPress={() => { if (confirm(`删除 ${stock.name}？`)) void change(`/stocks/${stock.id}`, 'DELETE') }}>删除</Button></>}
       </div>)}</div>
       {!group.stocks.length && <p className="py-12 text-center text-muted">暂无自选，添加第一只股票</p>}
+      <p className="pt-3 text-[11px] text-muted">共享自选 · 行情来源：长桥 · 非交易页面</p>
     </>}
   </main>
 }
