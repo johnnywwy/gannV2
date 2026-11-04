@@ -831,7 +831,7 @@ function KLineChartPage({ version = 1 }: { version?: 1 | 2 }) {
   const [periodValue, setPeriodValue] = useState("1d");
   const [mainIndicator, setMainIndicator] = useState("MA");
   const [selectedPaneIndicators, setSelectedPaneIndicators] =
-    useState<string[]>(defaultPaneIndicators);
+    useState<string[]>(version === 2 ? ['LMACD', 'RSI', 'VOL', NTP_INDICATOR] : defaultPaneIndicators);
   const [drawingTool, setDrawingTool] = useState<string | null>(null);
   const [zoomEnabled, setZoomEnabled] = useState(true);
   const [scrollEnabled, setScrollEnabled] = useState(true);
@@ -1084,6 +1084,7 @@ function KLineChartPage({ version = 1 }: { version?: 1 | 2 }) {
 
     if (!chart) return;
     chartRef.current = chart;
+    if (version === 2) chart.setBarSpace(4);
     chart.setDataLoader({
       getBars: async ({
         type,
@@ -1318,16 +1319,17 @@ function KLineChartPage({ version = 1 }: { version?: 1 | 2 }) {
     const chart = chartRef.current;
     if (!chart) return;
     paneIndicatorsRef.current = selectedPaneIndicators;
+    if (version === 2) chart.removeIndicator({ name: 'VOL', paneId: INDICATOR_PANE_ID });
     drawablePaneIndicators.forEach((name) =>
-      chart.removeIndicator({ name, paneId: INDICATOR_PANE_ID }),
+      chart.removeIndicator({ name, paneId: version === 2 && name !== 'LMACD' ? `v2_${name}` : INDICATOR_PANE_ID }),
     );
     selectedPaneIndicators
       .filter((name) => name !== NTP_INDICATOR)
       .forEach((name) => {
         chart.createIndicator(name, false, {
-          id: INDICATOR_PANE_ID,
-          height: 116,
-          minHeight: 80,
+          id: version === 2 && name !== 'LMACD' ? `v2_${name}` : INDICATOR_PANE_ID,
+          height: version === 2 ? (name === 'VOL' ? 86 : 106) : 116,
+          minHeight: version === 2 ? 64 : 80,
         });
       });
     renderNtpSignalOverlays(
@@ -1340,7 +1342,7 @@ function KLineChartPage({ version = 1 }: { version?: 1 | 2 }) {
       marketBarsRef.current,
       selectedPaneIndicators.includes("LMACD"),
     );
-  }, [selectedPaneIndicators]);
+  }, [selectedPaneIndicators, version]);
 
   useEffect(() => {
     paneIndicatorsRef.current = selectedPaneIndicators;
@@ -1507,7 +1509,7 @@ function KLineChartPage({ version = 1 }: { version?: 1 | 2 }) {
         </section>
         <div className="flex items-center gap-1 overflow-x-auto px-3 py-2" aria-label="K线周期">{['1d','1w','1M','1q','1m','5m','15m'].map(value => <HeroButton key={value} size="sm" variant={periodValue === value ? 'secondary' : 'ghost'} className="shrink-0" onPress={() => setPeriodValue(value)}>{periodOptions.find(option => option.value === value)?.label}{['1d','1w','1M','1q'].includes(value) ? 'K' : ''}</HeroButton>)}</div>
         <div className="flex flex-wrap items-center gap-1 border-b border-separator px-3 pb-2"><span className="mr-1 text-xs text-muted">主图</span>{['MA','BOLL'].map(value => <HeroButton key={value} size="sm" variant={mainIndicator === value ? 'secondary' : 'ghost'} onPress={() => setMainIndicator(value)}>{value}</HeroButton>)}<span className="ml-2 text-xs text-muted">副图</span>{['LMACD','RSI','VOL'].map(value => <HeroButton key={value} size="sm" variant={selectedPaneIndicators.includes(value) ? 'secondary' : 'ghost'} onPress={() => setSelectedPaneIndicators(previous => previous.includes(value) ? previous.filter(item => item !== value) : [...previous,value])}>{value}</HeroButton>)}</div>
-        <div className="relative h-[72dvh] min-h-[560px] bg-white" onClick={handleChartClick} onTouchStart={handleChartTouch} onTouchMove={handleChartTouch}>
+        <div className="relative h-[620px] bg-white sm:h-[740px]" onClick={handleChartClick} onTouchStart={handleChartTouch} onTouchMove={handleChartTouch}>
           <div ref={chartHostRef} className="h-full w-full" />
           {loadingCount > 0 && <div role="status" className="pointer-events-none absolute right-3 top-3 rounded-lg bg-surface/95 px-3 py-2 text-xs shadow-sm">{loadingText}</div>}
           {selectedTurningPoint && <TurningPointActionPopup point={selectedTurningPoint} onClose={() => setSelectedTurningPoint(null)} onTrendSelect={handleTrendSelect} />}
