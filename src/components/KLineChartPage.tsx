@@ -1496,7 +1496,7 @@ function KLineChartPage({ version = 1 }: { version?: 1 | 2 }) {
     return <main className="min-h-dvh bg-background pb-32 text-foreground">
       {contextHolder}
       <div className="mx-auto max-w-6xl">
-        <header className="flex h-14 items-center justify-between px-4"><Link to="/watchlist" className="text-sm text-muted">‹ 自选</Link><div className="flex items-center gap-3"><Link to="/kline" className="text-xs text-muted">旧版</Link><Link to="/watchlist" className="text-sm text-accent">搜索 / 添加自选</Link></div></header>
+        <header className="flex h-14 items-center justify-between px-4"><Link to="/watchlist" className="text-sm text-muted">‹ 自选</Link><div className="flex items-center gap-3"><Link to="/kline-legacy" className="text-xs text-muted">旧版</Link><Link to="/watchlist" className="text-sm text-accent">搜索 / 添加自选</Link></div></header>
         <section className="border-b-4 border-separator/40 px-4 pb-4">
           <h1 className="text-xl font-semibold">{activeSymbol.ticker.replace(/\.(SH|SZ|US)$/, '')} <span className="ml-2 text-base">{activeSymbol.name}</span></h1>
           <p className="mt-1 text-xs text-muted">{latest ? new Date(latest.timestamp).toLocaleString() : '等待行情'} · {periodValue} K线</p>
