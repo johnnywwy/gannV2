@@ -93,6 +93,7 @@ function AnimatedRoutes() {
       <Routes location={location}>
         <Route path="/" element={<SquareNineWebPage />} />
         <Route path="/kline" element={<KLineChartPage />} />
+        <Route path="/kline-v2" element={<KLineChartPage version={2} />} />
         <Route path="/backtest" element={<BacktestComingSoonPage />} />
         <Route path="/statistics" element={<StatisticsPage />} />
         <Route path="/watchlist" element={<WatchlistPage />} />

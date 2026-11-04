@@ -60,6 +60,8 @@ import {
   type GannProjectionPayload,
 } from "../utils/gannBridge";
 import { readKLineActiveSymbol, saveKLineActiveSymbol } from "../utils/kLineStore";
+import { Button as HeroButton } from '@heroui/react';
+import { Link } from 'react-router-dom';
 import {
   findNumberPosition,
   generateGannMatrix,
@@ -794,7 +796,7 @@ const lmacdIndicator: IndicatorTemplate<LmacdData, number> = {
 
 registerIndicator(lmacdIndicator);
 
-function KLineChartPage() {
+function KLineChartPage({ version = 1 }: { version?: 1 | 2 }) {
   const [messageApi, contextHolder] = message.useMessage();
   const chartHostRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<Chart | null>(null);
@@ -1484,6 +1486,35 @@ function KLineChartPage() {
     saveGannProjectionResult(projection);
     setSelectedTurningPoint(null);
   };
+
+  if (version === 2) {
+    const bars = marketBarsRef.current;
+    const latest = bars.at(-1);
+    const previous = bars.at(-2)?.close;
+    const change = latest && previous ? (latest.close / previous - 1) * 100 : null;
+    const priceClass = change === null ? 'text-muted' : change >= 0 ? 'text-danger' : 'text-success';
+    return <main className="min-h-dvh bg-background pb-32 text-foreground">
+      {contextHolder}
+      <div className="mx-auto max-w-6xl">
+        <header className="flex h-14 items-center justify-between px-4"><Link to="/watchlist" className="text-sm text-muted">‹ 自选</Link><div className="flex items-center gap-3"><Link to="/kline" className="text-xs text-muted">旧版</Link><Link to="/watchlist" className="text-sm text-accent">搜索 / 添加自选</Link></div></header>
+        <section className="border-b-4 border-separator/40 px-4 pb-4">
+          <h1 className="text-xl font-semibold">{activeSymbol.ticker.replace(/\.(SH|SZ|US)$/, '')} <span className="ml-2 text-base">{activeSymbol.name}</span></h1>
+          <p className="mt-1 text-xs text-muted">{latest ? new Date(latest.timestamp).toLocaleString() : '等待行情'} · {periodValue} K线</p>
+          <div className="mt-4 grid grid-cols-[1fr_1.2fr] items-center gap-4">
+            <div className={priceClass}><p className="text-3xl font-semibold tabular-nums">{latest ? latest.close.toFixed(3) : '—'}</p><p className="text-sm tabular-nums">{change === null ? '暂无涨跌幅' : `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`}<span className="ml-1 text-xs text-muted">本周期</span></p></div>
+            <dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs tabular-nums">{[['最高', latest?.high], ['今开', latest?.open], ['最低', latest?.low], ['前收', previous]].map(([label, value]) => <div key={label} className="flex justify-between gap-2"><dt className="text-muted">{label}</dt><dd>{typeof value === 'number' ? value.toFixed(3) : '—'}</dd></div>)}</dl>
+          </div>
+        </section>
+        <div className="flex items-center gap-1 overflow-x-auto px-3 py-2" aria-label="K线周期">{['1d','1w','1M','1q','1m','5m','15m'].map(value => <HeroButton key={value} size="sm" variant={periodValue === value ? 'secondary' : 'ghost'} className="shrink-0" onPress={() => setPeriodValue(value)}>{periodOptions.find(option => option.value === value)?.label}{['1d','1w','1M','1q'].includes(value) ? 'K' : ''}</HeroButton>)}</div>
+        <div className="flex flex-wrap items-center gap-1 border-b border-separator px-3 pb-2"><span className="mr-1 text-xs text-muted">主图</span>{['MA','BOLL'].map(value => <HeroButton key={value} size="sm" variant={mainIndicator === value ? 'secondary' : 'ghost'} onPress={() => setMainIndicator(value)}>{value}</HeroButton>)}<span className="ml-2 text-xs text-muted">副图</span>{['LMACD','RSI','VOL'].map(value => <HeroButton key={value} size="sm" variant={selectedPaneIndicators.includes(value) ? 'secondary' : 'ghost'} onPress={() => setSelectedPaneIndicators(previous => previous.includes(value) ? previous.filter(item => item !== value) : [...previous,value])}>{value}</HeroButton>)}</div>
+        <div className="relative h-[72dvh] min-h-[560px] bg-white" onClick={handleChartClick} onTouchStart={handleChartTouch} onTouchMove={handleChartTouch}>
+          <div ref={chartHostRef} className="h-full w-full" />
+          {loadingCount > 0 && <div role="status" className="pointer-events-none absolute right-3 top-3 rounded-lg bg-surface/95 px-3 py-2 text-xs shadow-sm">{loadingText}</div>}
+          {selectedTurningPoint && <TurningPointActionPopup point={selectedTurningPoint} onClose={() => setSelectedTurningPoint(null)} onTrendSelect={handleTrendSelect} />}
+        </div>
+      </div>
+    </main>;
+  }
 
   return (
     <main className="h-screen overflow-hidden bg-[#f5f5f5] pb-24">
