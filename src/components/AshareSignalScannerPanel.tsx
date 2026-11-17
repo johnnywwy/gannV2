@@ -96,6 +96,17 @@ type ScanResult = {
   errors?: Array<{ symbol: string; message: string }>;
 };
 
+function emptySignalGroups(timeframe: "日线" | "周线"): ScanResult["groups"] {
+  return {
+    ntp: { id: `${timeframe}-ntp`, name: `${timeframe}NTP 买入`, description: "NTP 买1 / 买2 信号", count: 0, securities: [] },
+    lmacd: { id: `${timeframe}-lmacd`, name: `${timeframe}LMACD 底部买入`, description: "LMACD 底部买入信号", count: 0, securities: [] },
+    confluence: { id: `${timeframe}-confluence`, name: `${timeframe}NTP+LMACD 共振`, description: "同一周期同时触发 NTP 和 LMACD 买入", count: 0, securities: [] },
+  };
+}
+
+const EMPTY_DAILY_GROUPS = emptySignalGroups("日线");
+const EMPTY_WEEKLY_GROUPS = emptySignalGroups("周线");
+
 type ScanHistorySummary = {
   date: string;
   startedAt?: string | null;
@@ -580,7 +591,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
                 showSizeChanger: true,
                 showTotal: (total) => `共 ${total} 条`,
               }}
-              locale={{ emptyText: "最新交易日没有标的触发该信号" }}
+              locale={{ emptyText: result ? "当前筛选条件下没有标的触发该信号" : "尚未生成扫描数据，扫描完成后将在这里显示标的" }}
               scroll={{ x: 680 }}
             />
           </div>
@@ -617,24 +628,21 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
     </div>
   );
 
-  const timeframeItems = result
-    ? [
+  const timeframeItems = [
         {
           key: "day",
           label: "日线",
-          children: buildTimeframePanel(result.groups, result.signalDate, "信号交易日"),
+          children: buildTimeframePanel(result?.groups ?? EMPTY_DAILY_GROUPS, result?.signalDate, "信号交易日"),
         },
         {
           key: "week",
           label: "周线",
-          children: buildTimeframePanel(result.weeklyGroups, result.weeklySignalDate, "完整周截止日"),
+          children: buildTimeframePanel(result?.weeklyGroups ?? EMPTY_WEEKLY_GROUPS, result?.weeklySignalDate, "完整周截止日"),
         },
-      ]
-    : [];
+      ];
 
-  const performanceItems = performance
-    ? (["ntp", "lmacd", "confluence"] as PerformanceStrategy[]).map((strategy) => {
-        const dateRecords = performance.records.filter((item) => (
+  const performanceItems = (["ntp", "lmacd", "confluence"] as PerformanceStrategy[]).map((strategy) => {
+        const dateRecords = (performance?.records ?? []).filter((item) => (
           item.strategy === strategy &&
           (performanceDate === "all" || item.entryMarketDate === performanceDate)
         ));
@@ -648,7 +656,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
         const filteredRecords = strategy === "ntp" && ntpSignalFilter !== "all"
           ? dateRecords.filter((item) => item.signal === ntpSignalFilter)
           : dateRecords;
-        const summary = summarizePerformanceRecords(filteredRecords, strategy, performance.updatedAt);
+        const summary = summarizePerformanceRecords(filteredRecords, strategy, performance?.updatedAt ?? "");
         const records = [...filteredRecords]
           .sort((left, right) => Number(right.currentReturnPct ?? -Infinity) - Number(left.currentReturnPct ?? -Infinity));
 
@@ -681,17 +689,17 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
                   <Card size="small"><Statistic title="累计记录" value={summary.count} /></Card>
                 </Col>
                 <Col xs={24} md={12} xl={6}>
-                  <Card size="small"><Statistic title="当前胜率" value={summary.winRate ?? 0} precision={2} suffix="%" /></Card>
+                  <Card size="small"><Statistic title="当前胜率" value={summary.winRate ?? "—"} precision={2} suffix="%" /></Card>
                 </Col>
                 <Col xs={24} md={12} xl={6}>
-                  <Card size="small"><Statistic title="平均累计收益" value={summary.averageReturnPct ?? 0} precision={2} suffix="%" valueStyle={returnColor(summary.averageReturnPct)} /></Card>
+                  <Card size="small"><Statistic title="平均累计收益" value={summary.averageReturnPct ?? "—"} precision={2} suffix="%" valueStyle={returnColor(summary.averageReturnPct)} /></Card>
                 </Col>
                 <Col xs={24} md={12} xl={6}>
-                  <Card size="small"><Statistic title={`平均次日收益 · ${summary.nextDayTrackedCount} 笔`} value={summary.averageNextDayReturnPct ?? 0} precision={2} suffix="%" valueStyle={returnColor(summary.averageNextDayReturnPct)} /></Card>
+                  <Card size="small"><Statistic title={`平均次日收益 · ${summary.nextDayTrackedCount} 笔`} value={summary.averageNextDayReturnPct ?? "—"} precision={2} suffix="%" valueStyle={returnColor(summary.averageNextDayReturnPct)} /></Card>
                 </Col>
               </Row>
               <div className="text-xs text-slate-500">
-                当前盈利 {summary.profitableCount} 笔，亏损 {summary.losingCount} 笔，持平 {summary.flatCount} 笔；每个交易日 {config.scheduleTime} 更新一次。
+                当前盈利 {summary.profitableCount} 笔，亏损 {summary.losingCount} 笔，持平 {summary.flatCount} 笔；{snapshot?.schedulerEnabled === false ? "自动更新已暂停" : `每个交易日 ${config.scheduleTime} 更新一次`}。
               </div>
               <Table<PerformanceRecord>
                 rowKey="id"
@@ -704,29 +712,26 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
                   showSizeChanger: true,
                   showTotal: (total) => `共 ${total} 条`,
                 }}
-                locale={{ emptyText: "当前筛选条件下没有信号跟踪记录" }}
+                locale={{ emptyText: performance ? "当前筛选条件下没有信号跟踪记录" : `尚无跟踪记录，扫描后将从 ${snapshot?.recordStartDate || "2026-08-26"} 开始重建` }}
                 scroll={{ x: 1230 }}
               />
             </div>
           ),
         };
-      })
-    : [];
+      });
   const selectedHistorySummary = historyIndex.find((item) => item.date === selectedHistoryDate);
-  const historyTimeframeItems = historyResult
-    ? [
+  const historyTimeframeItems = [
         {
           key: "history-day",
           label: "日线",
-          children: buildTimeframePanel(historyResult.groups, historyResult.signalDate, "信号交易日"),
+          children: buildTimeframePanel(historyResult?.groups ?? EMPTY_DAILY_GROUPS, historyResult?.signalDate, "信号交易日"),
         },
         {
           key: "history-week",
           label: "周线",
-          children: buildTimeframePanel(historyResult.weeklyGroups, historyResult.weeklySignalDate, "完整周截止日"),
+          children: buildTimeframePanel(historyResult?.weeklyGroups ?? EMPTY_WEEKLY_GROUPS, historyResult?.weeklySignalDate, "完整周截止日"),
         },
-      ]
-    : [];
+      ];
 
   return (
     <>
@@ -805,8 +810,12 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
             <Alert type="error" showIcon message="最近一次扫描失败" description={run.message} />
           )}
 
-          {result ? (
-            <>
+          {!result && !loading && (
+            <Alert type="info" showIcon message="暂无扫描结果，表格保留显示" description={`下次扫描将从 ${snapshot?.recordStartDate || "2026-08-26"} 开始重建记录。`} />
+          )}
+          <>
+            {result && (
+              <>
               <Row gutter={[12, 12]}>
                 <Col xs={24} md={12}><Card size="small"><Statistic title={`${config.marketName}标的`} value={result.universeCount} /></Card></Col>
                 <Col xs={24} md={12}><Card size="small"><Statistic title="成功扫描" value={result.successCount} suffix={result.failedCount ? `/ 失败 ${result.failedCount}` : ""} /></Card></Col>
@@ -815,6 +824,8 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
                 <span>完成时间：{formatDateTime(result.completedAt)}</span>
                 <span>成功率：{result.scannedCount ? ((result.successCount / result.scannedCount) * 100).toFixed(1) : "0.0"}%</span>
               </div>
+              </>
+            )}
               <Tabs tabPlacement="start" items={timeframeItems} />
               <section className="pt-2">
                 <Divider className="!my-6" />
@@ -834,6 +845,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
                       placeholder="选择扫描日期"
                       className="min-w-64"
                       loading={historyLoading}
+                      disabled={!historyIndex.length}
                       options={historyIndex.map((item) => ({
                         value: item.date,
                         label: `${item.date} · NTP ${item.counts.ntp} / LMACD ${item.counts.lmacd} / 共振 ${item.counts.confluence}`,
@@ -854,15 +866,11 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
                         <span>成功 {selectedHistorySummary.successCount} / 失败 {selectedHistorySummary.failedCount}</span>
                       </div>
                     )}
-                    {historyResult ? (
-                      <Tabs tabPlacement="start" items={historyTimeframeItems} />
-                    ) : (
-                      !historyLoading && !historyError && <Alert type="info" showIcon message="还没有历史扫描记录" />
-                    )}
+                    {!historyResult && !historyLoading && !historyError && <Alert type="info" showIcon message="还没有历史扫描记录" />}
+                    <Tabs tabPlacement="start" items={historyTimeframeItems} />
                   </div>
                 </Card>
               </section>
-              {performance && (
                 <section className="pt-2">
                   <Divider className="!my-6" />
                   <Card
@@ -874,7 +882,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
                         type="primary"
                         icon={<ReloadOutlined />}
                         loading={refreshingPrices}
-                        disabled={running}
+                        disabled={running || !performance?.records.length}
                         onClick={() => void refreshPerformancePrices()}
                       >
                         刷新当前价格
@@ -903,17 +911,13 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
                       </div>
                       <div className="text-xs text-slate-500">
                         每次触发都会按 {config.scheduleTime} 收盘扫描价建立一笔独立记录；从下一交易日开始持续更新，不会因为信号消失或自选股变化而删除。
-                        最近更新：{formatDateTime(performance.updatedAt)}
+                        最近更新：{formatDateTime(performance?.updatedAt)}
                       </div>
                     </div>
                     <Tabs tabPlacement="start" items={performanceItems} />
                   </Card>
                 </section>
-              )}
-            </>
-          ) : (
-            !loading && <Alert type="warning" showIcon message="还没有扫描结果，请点击“立即扫描”生成第一批分组。" />
-          )}
+          </>
         </div>
       </Card>
     </>
