@@ -219,7 +219,7 @@ type PerformancePage = SignalPerformance & {
 };
 
 async function loadAllPerformancePages(performanceUrl: string) {
-  const loadPage = async (page: number): Promise<PerformancePage> => {
+  const loadPage = async (page: number): Promise<PerformancePage | null> => {
     let lastError: unknown = null;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       try {
@@ -230,6 +230,7 @@ async function loadAllPerformancePages(performanceUrl: string) {
         const response = await fetch(url, { cache: "no-store" });
         if (!response.ok) throw new Error(`盈亏跟踪接口失败：${response.status}`);
         const payload = await response.json();
+        if (payload?.success && payload.data === null && page === 1) return null;
         if (!payload?.success || !payload?.data?.pagination) throw new Error("盈亏跟踪格式不正确");
         return payload.data as PerformancePage;
       } catch (error) {
@@ -240,13 +241,14 @@ async function loadAllPerformancePages(performanceUrl: string) {
   };
 
   const firstPage = await loadPage(1);
+  if (!firstPage) return null;
   const remainingPages = await Promise.all(
     Array.from({ length: Math.max(0, firstPage.pagination.pageCount - 1) }, (_, index) => loadPage(index + 2)),
   );
 
   return {
     ...firstPage,
-    records: [firstPage, ...remainingPages].flatMap((page) => page.records),
+    records: [firstPage, ...remainingPages].flatMap((page) => page?.records || []),
   } satisfies PerformancePage;
 }
 
