@@ -29,26 +29,31 @@ const MARKET_CONFIG = {
   cn: {
     slug: "a-shares",
     marketName: "A 股",
-    title: "全 A 股 · 日线 / 周线信号",
+    title: "沪深300 + 中证500 · 日线 / 周线信号",
     scheduleText: "每个工作日北京时间 15:30",
     scheduleTime: "15:30",
     historyText: "每天 15:30",
-    universeText: "",
+    universeText: "仅扫描沪深300与中证500成分股，合并去重。",
     iconClass: "text-red-500",
   },
   us: {
     slug: "us-macd-divergence",
     marketName: "美股",
-    title: "全美股 · 日线 / 周线信号",
+    title: "标普500 + 纳斯达克100 · 日线 / 周线信号",
     scheduleText: "每个美股交易日纽约时间 16:30",
     scheduleTime: "16:30（纽约时间）",
     historyText: "每个美股交易日 16:30（纽约时间）",
-    universeText: "仅扫描市值不低于 3 亿美元且股价不低于 1 美元的股票。",
+    universeText: "根据 SPY、QQQ 官方股票持仓合并去重；道琼斯作为筛选标签。",
     iconClass: "text-blue-500",
   },
 } satisfies Record<MarketVariant, Record<string, string>>;
 
+const INDEX_LABELS: Record<string, string> = { CSI300: "沪深300", CSI500: "中证500", SP500: "标普500", NASDAQ100: "纳斯达克100", DJIA: "道琼斯30" };
+
+type StockPool = { id: string; name: string; count: number; stale?: boolean; warning?: string; sources: Array<{ tag: string; asOf: string; count: number }> };
+
 type SignalSecurity = {
+  indexTags?: string[];
   symbol: string;
   name?: string;
   nameCn?: string;
@@ -69,6 +74,7 @@ type SignalGroup = {
 };
 
 type ScanResult = {
+  stockPool?: StockPool;
   startedAt: string;
   completedAt: string;
   signalDate?: string | null;
@@ -126,6 +132,8 @@ type ScanRun = {
 };
 
 type ScanSnapshot = {
+  schedulerEnabled?: boolean;
+  stockPool?: StockPool;
   result: ScanResult | null;
   performance: SignalPerformance | null;
   run: ScanRun;
@@ -250,6 +258,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
   const PERFORMANCE_URL = `${API_BASE}/scanner/${config.slug}/performance`;
   const PERFORMANCE_REFRESH_URL = `${API_BASE}/scanner/${config.slug}/performance/refresh`;
   const [messageApi, contextHolder] = message.useMessage();
+  const [indexFilter, setIndexFilter] = useState("all");
   const [snapshot, setSnapshot] = useState<ScanSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
@@ -437,6 +446,11 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
         render: (_: unknown, row: SignalSecurity) => row.nameCn || row.name || "—",
       },
       {
+        title: "所属指数",
+        key: "indexTags",
+        render: (_: unknown, row: SignalSecurity) => <Space wrap>{row.indexTags?.map(tag => <Tag key={tag}>{INDEX_LABELS[tag] || tag}</Tag>)}</Space>,
+      },
+      {
         title: "信号",
         dataIndex: "signal",
         width: 110,
@@ -556,7 +570,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
               rowKey="symbol"
               size="small"
               columns={columns}
-              dataSource={group.securities}
+              dataSource={group.securities.filter(row => indexFilter === "all" || row.indexTags?.includes(indexFilter))}
               pagination={{
                 defaultPageSize: 20,
                 pageSizeOptions: [20, 50, 100],
@@ -748,9 +762,21 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
       >
         <div className="space-y-4">
           <Typography.Text type="secondary">
-            {config.scheduleText} 自动扫描，使用完整收盘日 K 和收盘扫描价记录信号。周线只使用已经收盘的完整周 K。LMACD 只统计刚触发的“底部买入”。
+            {snapshot?.schedulerEnabled === false ? "自动扫描已暂停，可手动开始；计划时间：" : "自动扫描时间："}{config.scheduleText}，使用完整收盘日 K 和收盘扫描价记录信号。周线只使用已经收盘的完整周 K。LMACD 只统计刚触发的“底部买入”。
             {config.universeText && ` ${config.universeText}`}
           </Typography.Text>
+
+          {snapshot?.stockPool && (
+            <Space direction="vertical" className="w-full">
+              <Typography.Text>当前股票池：{snapshot.stockPool.name} · {snapshot.stockPool.count} 只（合并去重）</Typography.Text>
+              <Typography.Text type="secondary">名单日期：{snapshot.stockPool.sources.map(source => `${INDEX_LABELS[source.tag]} ${source.asOf}（${source.count}）`).join("；")}</Typography.Text>
+              {(snapshot.stockPool.warning || snapshot.stockPool.stale) && <Alert type="warning" showIcon message={snapshot.stockPool.warning || "名单待更新；扫描将尝试更新，失败时沿用已验证名单。"} />}
+              <Select value={indexFilter} onChange={setIndexFilter} style={{ minWidth: 220 }} options={[
+                { value: "all", label: "全部股票池成分" },
+                ...(market === "cn" ? ["CSI300", "CSI500"] : ["SP500", "NASDAQ100", "DJIA"]).map(tag => ({ value: tag, label: INDEX_LABELS[tag] })),
+              ]} />
+            </Space>
+          )}
 
           {error && <Alert type="error" showIcon message={error} />}
 
