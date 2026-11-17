@@ -1,6 +1,6 @@
 import { BellFilled, BellOutlined, LoadingOutlined } from '@ant-design/icons'
 import { Button, Tooltip, message } from 'antd'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 const PUSH_API = 'https://n1-longbridge.johnnywwy.com/api/push'
 
@@ -21,6 +21,7 @@ export default function PushNotificationButton() {
   const [supported] = useState(() => (
     'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window
   ))
+  const sending = useRef(false)
   const [loading, setLoading] = useState(false)
   const [subscribed, setSubscribed] = useState(false)
 
@@ -32,7 +33,13 @@ export default function PushNotificationButton() {
   }, [supported])
 
   const testPush = async () => {
-    const response = await fetch(`${PUSH_API}/test`, { method: 'POST' })
+    const registration = await getRegistration()
+    const subscription = await registration.pushManager.getSubscription()
+    if (!subscription) { setSubscribed(false); throw new Error('请先开启推送') }
+    const response = await fetch(`${PUSH_API}/test`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint: subscription.endpoint }),
+    })
     const payload = await response.json()
     if (!response.ok || !payload.success) throw new Error(payload.message || '测试通知发送失败')
     if (payload.data?.sent > 0) messageApi.success('测试通知已提交，请查看系统通知')
@@ -44,13 +51,17 @@ export default function PushNotificationButton() {
     } else throw new Error(payload.data?.failed ? '推送发送失败，请稍后重试' : '没有有效推送订阅，请重新开启推送')
   }
   const testExistingPush = async () => {
+    if (sending.current) return
+    sending.current = true
     setLoading(true)
     try { await testPush() } catch (error) {
       messageApi.error(error instanceof Error ? error.message : '测试通知失败')
-    } finally { setLoading(false) }
+    } finally { sending.current = false; setLoading(false) }
   }
 
   const enablePush = async () => {
+    if (sending.current) return
+    sending.current = true
     setLoading(true)
     try {
       const configResponse = await fetch(`${PUSH_API}/config`, { cache: 'no-store' })
@@ -77,6 +88,7 @@ export default function PushNotificationButton() {
     } catch (error) {
       messageApi.error(error instanceof Error ? error.message : '开启推送失败')
     } finally {
+      sending.current = false
       setLoading(false)
     }
   }
