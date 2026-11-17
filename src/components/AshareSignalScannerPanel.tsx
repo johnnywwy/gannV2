@@ -132,6 +132,7 @@ type ScanRun = {
 };
 
 type ScanSnapshot = {
+  recordStartDate?: string;
   schedulerEnabled?: boolean;
   stockPool?: StockPool;
   result: ScanResult | null;
@@ -770,7 +771,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
 
           {snapshot?.stockPool && (
             <Space direction="vertical" className="w-full">
-              <Typography.Text>当前股票池：{snapshot.stockPool.name} · {snapshot.stockPool.count} 只（合并去重）</Typography.Text>
+              <Typography.Text>记录起点：{snapshot.recordStartDate || "2026-08-26"} · 当前股票池：{snapshot.stockPool.name} · {snapshot.stockPool.count} 只（合并去重）</Typography.Text>
               <Typography.Text type="secondary">名单日期：{snapshot.stockPool.sources.map(source => `${INDEX_LABELS[source.tag]} ${source.asOf}（${source.count}）`).join("；")}</Typography.Text>
               {(snapshot.stockPool.warning || snapshot.stockPool.stale) && <Alert type="warning" showIcon message={snapshot.stockPool.warning || "名单待更新；扫描将尝试更新，失败时沿用已验证名单。"} />}
               <Select value={indexFilter} onChange={setIndexFilter} style={{ minWidth: 220 }} options={[
