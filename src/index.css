@@ -49,3 +49,68 @@ body {
     animation: none;
   }
 }
+
+.scanner-stock-link {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 0;
+  text-align: left;
+  cursor: pointer;
+}
+.scanner-stock-name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #1d4ed8;
+  font-weight: 600;
+}
+.scanner-stock-code {
+  display: block;
+  color: #64748b;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.scanner-stock-link:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+@media (max-width: 767px) {
+  .backtest-page { overflow-wrap: anywhere; }
+  .backtest-page h2.ant-typography { font-size: 22px; }
+  .scanner-panel, .scanner-panel .ant-tabs, .scanner-panel .ant-tabs-content-holder { min-width: 0; }
+  .scanner-main-card > .ant-card-head,
+  .scanner-section-card > .ant-card-head { padding: 12px; }
+  .scanner-main-card > .ant-card-body,
+  .scanner-section-card > .ant-card-body { padding: 12px; }
+  .scanner-main-card > .ant-card-head .ant-card-head-wrapper,
+  .scanner-section-card > .ant-card-head .ant-card-head-wrapper {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .scanner-panel .ant-card-head-title { white-space: normal; overflow: visible; font-size: 15px; }
+  .scanner-panel .ant-card-extra { margin-inline-start: 0; max-width: 100%; }
+  .scanner-actions { display: flex; gap: 8px !important; }
+  .scanner-actions > .ant-space-item { flex: 1 1 auto; }
+  .scanner-actions .ant-btn { width: 100%; min-height: 36px; padding-inline: 8px; }
+  .scanner-filter-select { width: 100%; min-width: 0 !important; max-width: 100%; }
+  .scanner-panel .ant-statistic-title { font-size: 11px; line-height: 1.5; }
+  .scanner-panel .ant-statistic-content { font-size: 20px; }
+  .scanner-panel .ant-statistic-content-suffix { font-size: 12px; }
+  .scanner-panel .ant-row .ant-card-body { padding: 10px 8px; }
+  .scanner-panel .ant-tabs-tab { padding-block: 10px; }
+  .scanner-panel .ant-tabs-tab + .ant-tabs-tab { margin-inline-start: 18px; }
+  .scanner-data-table .ant-table { font-size: 12px; }
+  .scanner-data-table .ant-table-thead > tr > th,
+  .scanner-data-table .ant-table-tbody > tr > td { padding: 10px 4px; }
+  .scanner-data-table .ant-tag { margin-inline-end: 0; padding-inline: 4px; font-size: 11px; white-space: normal; }
+  .scanner-data-table .ant-table-row-expand-icon { min-width: 22px; min-height: 22px; }
+  .scanner-row-details { padding: 6px 4px; }
+  .scanner-row-details .ant-descriptions-item-label { width: 90px; color: #64748b; }
+  .scanner-row-details .ant-descriptions-item-content { overflow-wrap: anywhere; }
+  .scanner-data-table .ant-pagination { justify-content: center; }
+}

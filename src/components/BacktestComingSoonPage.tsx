@@ -4,7 +4,7 @@ import UsMacdDivergencePanel from "./UsMacdDivergencePanel";
 
 export default function BacktestComingSoonPage() {
   return (
-    <main className="min-h-screen bg-slate-50 px-4 pb-28 pt-6 sm:px-8">
+    <main className="backtest-page min-h-screen bg-slate-50 px-2 pb-32 pt-4 sm:px-8 sm:pt-6">
       <div className="mx-auto max-w-[1500px] space-y-4">
         <div>
           <Typography.Title level={2} className="!mb-1">

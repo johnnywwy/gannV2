@@ -5,6 +5,8 @@ import {
   Card,
   Col,
   Divider,
+  Descriptions,
+  Grid,
   Progress,
   Row,
   Select,
@@ -17,6 +19,7 @@ import {
   Typography,
   message,
 } from "antd";
+import type { TableColumnsType } from "antd";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { saveKLineActiveSymbol } from "../utils/kLineStore";
 import PushNotificationButton from "./PushNotificationButton";
@@ -266,6 +269,8 @@ async function loadAllPerformancePages(performanceUrl: string) {
 
 export default function AshareSignalScannerPanel({ market = "cn" }: { market?: MarketVariant }) {
   const config = MARKET_CONFIG[market];
+  const screens = Grid.useBreakpoint();
+  const isMobile = !screens.md;
   const SIGNALS_URL = `${API_BASE}/scanner/${config.slug}/signals`;
   const RUN_URL = `${API_BASE}/scanner/${config.slug}/run`;
   const HISTORY_URL = `${API_BASE}/scanner/${config.slug}/history`;
@@ -437,7 +442,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
     }
   };
 
-  const columns = useMemo(
+  const desktopColumns = useMemo(
     () => [
       {
         title: "代码",
@@ -490,7 +495,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
     [],
   );
 
-  const performanceColumns = useMemo(
+  const desktopPerformanceColumns = useMemo(
     () => [
       {
         title: "代码",
@@ -566,10 +571,57 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
     [],
   );
 
+  const stockCell = (symbol: string, name?: string) => (
+    <button
+      className="scanner-stock-link"
+      aria-label={`查看${name || symbol}K线`}
+      onClick={(event) => {
+        event.stopPropagation();
+        saveKLineActiveSymbol({ ticker: symbol });
+        window.location.hash = "/kline";
+      }}
+    >
+      <span className="scanner-stock-name">{name || symbol.split(".")[0]}</span>
+      <span className="scanner-stock-code">{symbol}</span>
+    </button>
+  );
+  const mobileColumns: TableColumnsType<SignalSecurity> = [
+    { title: "股票", key: "stock", width: "42%", render: (_, row) => stockCell(row.symbol, row.nameCn || row.name) },
+    { title: "信号", dataIndex: "signal", width: "29%", render: (value: string) => <Tag color="red">{value.replace("底部买入", "底买").replace("NTP买入 + LMACD底买", "共振")}</Tag> },
+    { title: "扫描价", dataIndex: "latestClose", width: "29%", align: "right", render: formatPrice },
+  ];
+  const mobilePerformanceColumns: TableColumnsType<PerformanceRecord> = [
+    { title: "股票", key: "stock", width: "42%", render: (_, row) => stockCell(row.symbol, row.name) },
+    { title: "累计盈亏", dataIndex: "currentReturnPct", width: "29%", align: "right", render: renderReturnPct },
+    { title: "次日盈亏", dataIndex: "nextDayReturnPct", width: "29%", align: "right", render: renderReturnPct },
+  ];
+  const mobilePagination = { defaultPageSize: 10, showSizeChanger: false, simple: true as const };
+  const signalDetails = (row: SignalSecurity) => (
+    <Descriptions className="scanner-row-details" size="small" column={1} items={[
+      { key: "name", label: "股票", children: `${row.nameCn || row.name || ""} ${row.symbol}` },
+      { key: "index", label: "所属指数", children: row.indexTags?.map(tag => INDEX_LABELS[tag] || tag).join("、") || "—" },
+      { key: "signal", label: "完整信号", children: row.signal },
+      { key: "price", label: "扫描价", children: formatPrice(row.latestClose) },
+      { key: "date", label: "触发日期", children: formatDate(row.signalAt) },
+    ]} />
+  );
+  const performanceDetails = (row: PerformanceRecord) => (
+    <Descriptions className="scanner-row-details" size="small" column={1} items={[
+      { key: "stock", label: "股票", children: `${row.name} ${row.symbol}` },
+      { key: "signal", label: "信号", children: row.signal },
+      { key: "date", label: "触发日", children: row.entryMarketDate },
+      { key: "entry", label: "扫描价", children: formatPrice(row.entryPrice) },
+      { key: "latest", label: "最新价", children: `${formatPrice(row.latestPrice)} · ${formatDate(row.latestPriceAt)}` },
+      { key: "macd", label: "MACD底背离", children: renderMacdDivergence(row) },
+      { key: "range", label: "最高 / 最低", children: `${formatReturnPct(row.maxReturnPct)} / ${formatReturnPct(row.minReturnPct)}` },
+      { key: "days", label: "跟踪天数", children: `${row.holdingTradingDays} 天` },
+    ]} />
+  );
+
   const buildGroupTabs = (groups: ScanResult["groups"]) =>
     [groups.ntp, groups.lmacd, groups.confluence].map((group) => ({
         key: group.id,
-        label: `${group.name.replace(/^(日线|周线)/, "")} (${group.count})`,
+        label: `${isMobile ? (group === groups.ntp ? "NTP" : group === groups.lmacd ? "LMACD" : "共振") : group.name.replace(/^(日线|周线)/, "")} (${group.count})`,
         children: (
           <div className="space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -586,16 +638,20 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
             <Table<SignalSecurity>
               rowKey="symbol"
               size="small"
-              columns={columns}
+              className="scanner-data-table"
+              key={isMobile ? "mobile" : "desktop"}
+              tableLayout={isMobile ? "fixed" : "auto"}
+              columns={isMobile ? mobileColumns : desktopColumns}
+              expandable={isMobile ? { expandedRowRender: signalDetails, expandRowByClick: true, columnWidth: 28 } : undefined}
               dataSource={group.securities.filter(row => indexFilter === "all" || row.indexTags?.includes(indexFilter))}
-              pagination={{
+              pagination={isMobile ? mobilePagination : {
                 defaultPageSize: 20,
                 pageSizeOptions: [20, 50, 100],
                 showSizeChanger: true,
                 showTotal: (total) => `共 ${total} 条`,
               }}
               locale={{ emptyText: result ? "当前筛选条件下没有标的触发该信号" : "尚未生成扫描数据，扫描完成后将在这里显示标的" }}
-              scroll={{ x: 680 }}
+              scroll={isMobile ? undefined : { x: 680 }}
             />
           </div>
         ),
@@ -608,17 +664,17 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
   ) => (
     <div className="space-y-4">
       <Row gutter={[12, 12]}>
-        <Col xs={24} md={8}>
+        <Col xs={8} md={8}>
           <Card size="small">
             <Statistic title="NTP 买入" value={groups.ntp.count} valueStyle={{ color: "#dc2626" }} />
           </Card>
         </Col>
-        <Col xs={24} md={8}>
+        <Col xs={8} md={8}>
           <Card size="small">
             <Statistic title="LMACD 底部买入" value={groups.lmacd.count} valueStyle={{ color: "#d97706" }} />
           </Card>
         </Col>
-        <Col xs={24} md={8}>
+        <Col xs={8} md={8}>
           <Card size="small">
             <Statistic title="NTP+LMACD 共振" value={groups.confluence.count} valueStyle={{ color: "#7c3aed" }} />
           </Card>
@@ -627,7 +683,8 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
       <Typography.Text type="secondary" className="text-xs">
         {dateLabel}：{formatDate(signalDate)}
       </Typography.Text>
-      <Tabs items={buildGroupTabs(groups)} />
+      {isMobile && <Typography.Text type="secondary" className="text-xs">点左侧 + 或行内空白查看详情，点股票查看 K 线</Typography.Text>}
+      <Tabs size={isMobile ? "small" : "middle"} items={buildGroupTabs(groups)} />
     </div>
   );
 
@@ -665,7 +722,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
 
         return {
           key: strategy,
-          label: `${summary.label} (${summary.count})`,
+          label: `${isMobile ? ({ ntp: "NTP", lmacd: "LMACD", confluence: "共振" }[strategy]) : summary.label} (${summary.count})`,
           children: (
             <div className="space-y-4">
               {strategy === "ntp" && ntpSignalCounts && (
@@ -674,7 +731,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
                   <Select<NtpSignalFilter>
                     aria-label="筛选NTP买入信号"
                     value={ntpSignalFilter}
-                    className="min-w-48"
+                    className="scanner-filter-select min-w-48"
                     options={[
                       { value: "all", label: `全部买入 · ${ntpSignalCounts.all} 笔` },
                       { value: "买1", label: `买1 · ${ntpSignalCounts["买1"]} 笔` },
@@ -688,35 +745,40 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
                 </div>
               )}
               <Row gutter={[12, 12]}>
-                <Col xs={24} md={12} xl={6}>
+                <Col xs={12} md={12} xl={6}>
                   <Card size="small"><Statistic title="累计记录" value={summary.count} /></Card>
                 </Col>
-                <Col xs={24} md={12} xl={6}>
+                <Col xs={12} md={12} xl={6}>
                   <Card size="small"><Statistic title="当前胜率" value={summary.winRate ?? "—"} precision={2} suffix="%" /></Card>
                 </Col>
-                <Col xs={24} md={12} xl={6}>
+                <Col xs={12} md={12} xl={6}>
                   <Card size="small"><Statistic title="平均累计收益" value={summary.averageReturnPct ?? "—"} precision={2} suffix="%" valueStyle={returnColor(summary.averageReturnPct)} /></Card>
                 </Col>
-                <Col xs={24} md={12} xl={6}>
+                <Col xs={12} md={12} xl={6}>
                   <Card size="small"><Statistic title={`平均次日收益 · ${summary.nextDayTrackedCount} 笔`} value={summary.averageNextDayReturnPct ?? "—"} precision={2} suffix="%" valueStyle={returnColor(summary.averageNextDayReturnPct)} /></Card>
                 </Col>
               </Row>
               <div className="text-xs text-slate-500">
                 当前盈利 {summary.profitableCount} 笔，亏损 {summary.losingCount} 笔，持平 {summary.flatCount} 笔；{snapshot?.schedulerEnabled === false ? "自动更新已暂停" : `每个交易日 ${config.scheduleTime} 更新一次`}。
               </div>
+              {isMobile && <Typography.Text type="secondary" className="text-xs">展开行可看触发日、价格、MACD 底背离和收益区间</Typography.Text>}
               <Table<PerformanceRecord>
                 rowKey="id"
                 size="small"
-                columns={performanceColumns}
+                className="scanner-data-table"
+                key={isMobile ? "mobile" : "desktop"}
+                tableLayout={isMobile ? "fixed" : "auto"}
+                columns={isMobile ? mobilePerformanceColumns : desktopPerformanceColumns}
+                expandable={isMobile ? { expandedRowRender: performanceDetails, expandRowByClick: true, columnWidth: 28 } : undefined}
                 dataSource={records}
-                pagination={{
+                pagination={isMobile ? mobilePagination : {
                   defaultPageSize: 20,
                   pageSizeOptions: [20, 50, 100],
                   showSizeChanger: true,
                   showTotal: (total) => `共 ${total} 条`,
                 }}
                 locale={{ emptyText: performance ? "当前筛选条件下没有信号跟踪记录" : `尚无跟踪记录，扫描后将从 ${snapshot?.recordStartDate || "2026-08-26"} 开始重建` }}
-                scroll={{ x: 1230 }}
+                scroll={isMobile ? undefined : { x: 1230 }}
               />
             </div>
           ),
@@ -740,6 +802,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
     <>
       {contextHolder}
       <Card
+        className="scanner-panel scanner-main-card"
         title={
           <Space>
             <StockOutlined className={config.iconClass} />
@@ -747,7 +810,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
           </Space>
         }
         extra={
-          <Space>
+          <Space wrap className="scanner-actions">
             <PushNotificationButton />
             <Button
               icon={<ReloadOutlined />}
@@ -782,7 +845,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
               <Typography.Text>记录起点：{snapshot.recordStartDate || "2026-08-26"} · 当前股票池：{snapshot.stockPool.name} · {snapshot.stockPool.count} 只（合并去重）</Typography.Text>
               <Typography.Text type="secondary">名单日期：{snapshot.stockPool.sources.map(source => `${INDEX_LABELS[source.tag]} ${source.asOf}（${source.count}）`).join("；")}</Typography.Text>
               {(snapshot.stockPool.warning || snapshot.stockPool.stale) && <Alert type="warning" showIcon message={snapshot.stockPool.warning || "名单待更新；扫描将尝试更新，失败时沿用已验证名单。"} />}
-              <Select value={indexFilter} onChange={setIndexFilter} style={{ minWidth: 220 }} options={[
+              <Select value={indexFilter} onChange={setIndexFilter} className="scanner-filter-select" style={{ minWidth: 220 }} aria-label="筛选所属指数" options={[
                 { value: "all", label: "全部股票池成分" },
                 ...(market === "cn" ? ["CSI300", "CSI500"] : ["SP500", "NASDAQ100", "DJIA"]).map(tag => ({ value: tag, label: INDEX_LABELS[tag] })),
               ]} />
@@ -820,8 +883,8 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
             {result && (
               <>
               <Row gutter={[12, 12]}>
-                <Col xs={24} md={12}><Card size="small"><Statistic title={`${config.marketName}标的`} value={result.universeCount} /></Card></Col>
-                <Col xs={24} md={12}><Card size="small"><Statistic title="成功扫描" value={result.successCount} suffix={result.failedCount ? `/ 失败 ${result.failedCount}` : ""} /></Card></Col>
+                <Col xs={12} md={12}><Card size="small"><Statistic title={`${config.marketName}标的`} value={result.universeCount} /></Card></Col>
+                <Col xs={12} md={12}><Card size="small"><Statistic title="成功扫描" value={result.successCount} suffix={result.failedCount ? `/ 失败 ${result.failedCount}` : ""} /></Card></Col>
               </Row>
               <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-slate-500">
                 <span>完成时间：{formatDateTime(result.completedAt)}</span>
@@ -829,12 +892,12 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
               </div>
               </>
             )}
-              <Tabs tabPlacement="start" items={timeframeItems} />
+              <Tabs tabPlacement={isMobile ? "top" : "start"} items={timeframeItems} />
               <section className="pt-2">
                 <Divider className="!my-6" />
                 <Card
                   size="small"
-                  className="border-t-4 border-t-amber-500 shadow-sm"
+                  className="scanner-section-card border-t-4 border-t-amber-500 shadow-sm"
                   title={
                     <Space>
                       <HistoryOutlined />
@@ -846,7 +909,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
                       aria-label="选择历史扫描日期"
                       value={selectedHistoryDate}
                       placeholder="选择扫描日期"
-                      className="min-w-64"
+                      className="scanner-filter-select min-w-64"
                       loading={historyLoading}
                       disabled={!historyIndex.length}
                       options={historyIndex.map((item) => ({
@@ -870,7 +933,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
                       </div>
                     )}
                     {!historyResult && !historyLoading && !historyError && <Alert type="info" showIcon message="还没有历史扫描记录" />}
-                    <Tabs tabPlacement="start" items={historyTimeframeItems} />
+                    <Tabs tabPlacement={isMobile ? "top" : "start"} items={historyTimeframeItems} />
                   </div>
                 </Card>
               </section>
@@ -878,7 +941,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
                   <Divider className="!my-6" />
                   <Card
                     size="small"
-                    className="border-t-4 border-t-blue-500 shadow-sm"
+                    className="scanner-section-card border-t-4 border-t-blue-500 shadow-sm"
                     title="信号触发后的持续盈亏跟踪"
                     extra={
                       <Button
@@ -898,7 +961,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
                         <Select
                           aria-label="选择盈亏跟踪触发日期"
                           value={performanceDate}
-                          className="min-w-56"
+                          className="scanner-filter-select min-w-56"
                           options={[
                             { value: "all", label: `全部日期 · ${performanceRecordCount} 笔` },
                             ...performanceDates.map((item) => ({
@@ -917,7 +980,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
                         最近更新：{formatDateTime(performance?.updatedAt)}
                       </div>
                     </div>
-                    <Tabs tabPlacement="start" items={performanceItems} />
+                    <Tabs tabPlacement={isMobile ? "top" : "start"} items={performanceItems} />
                   </Card>
                 </section>
           </>
@@ -973,6 +1036,7 @@ function formatDateTime(value?: string | null) {
 }
 
 function formatPrice(value?: number | string | null) {
+  if (value === null || value === undefined || value === "") return "—";
   const price = Number(value);
   return Number.isFinite(price) ? price.toFixed(2) : "—";
 }
