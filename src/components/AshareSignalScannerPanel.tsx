@@ -43,9 +43,9 @@ const MARKET_CONFIG = {
     slug: "us-macd-divergence",
     marketName: "美股",
     title: "标普500 + 纳斯达克100 · 日线 / 周线信号",
-    scheduleText: "每个美股交易日纽约时间 16:30",
-    scheduleTime: "16:30（纽约时间）",
-    historyText: "每个美股交易日 16:30（纽约时间）",
+    scheduleText: "美股交易日结束后的北京时间 05:30",
+    scheduleTime: "05:30（北京时间）",
+    historyText: "美股交易日次日 05:30（北京时间）",
     universeText: "根据 SPY、QQQ 官方股票持仓合并去重；道琼斯作为筛选标签。",
     iconClass: "text-blue-500",
   },
@@ -838,6 +838,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
           <Typography.Text type="secondary">
             {snapshot?.schedulerEnabled === false ? "自动扫描已暂停，可手动开始；计划时间：" : "自动扫描时间："}{config.scheduleText}，使用完整收盘日 K 和收盘扫描价记录信号。周线只使用已经收盘的完整周 K。LMACD 只统计刚触发的“底部买入”。
             {config.universeText && ` ${config.universeText}`}
+            {market === "us" ? " 数据更新完成后通知，最早北京时间 05:30；全年固定此时间。" : " 数据更新完成后发送通知，无买入信号也会通知。"}
           </Typography.Text>
 
           {snapshot?.stockPool && (
