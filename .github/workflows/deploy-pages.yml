@@ -1,11 +1,14 @@
 name: Deploy to GitHub Pages
 
 on:
-  push:
-    branches:
-      - main
-      - master
   workflow_dispatch:
+    inputs:
+      deploy_ref:
+        description: '要部署的分支或标签（留空则使用上方选择的分支）'
+        required: false
+        type: string
+
+run-name: Deploy Pages · ${{ inputs.deploy_ref || github.ref_name }}
 
 permissions:
   contents: read
@@ -23,6 +26,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.deploy_ref || github.ref }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4

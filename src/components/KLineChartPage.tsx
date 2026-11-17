@@ -60,6 +60,8 @@ import {
   type GannProjectionPayload,
 } from "../utils/gannBridge";
 import { readKLineActiveSymbol, saveKLineActiveSymbol } from "../utils/kLineStore";
+import { Button as HeroButton } from '@heroui/react';
+import { Link } from 'react-router-dom';
 import {
   findNumberPosition,
   generateGannMatrix,
@@ -672,7 +674,7 @@ const lmacdSignalOverlay: OverlayTemplate<LmacdSignalData> = {
   needDefaultPointFigure: false,
   needDefaultXAxisFigure: false,
   needDefaultYAxisFigure: false,
-  createPointFigures: ({ overlay, coordinates }) => {
+  createPointFigures: ({ overlay, coordinates, bounding }) => {
     const coordinate = coordinates[0];
     const data = overlay.extendData as LmacdSignalData;
     const isBottom =
@@ -706,8 +708,10 @@ const lmacdSignalOverlay: OverlayTemplate<LmacdSignalData> = {
             backgroundColor: "rgba(242, 54, 69, 0.14)",
             borderColor: "rgba(242, 54, 69, 0.72)",
           };
-    const labelY =
-      coordinate.y + (isBottom ? 20 + data.slot * 22 : -20 - data.slot * 22);
+    const labelY = Math.max(12, Math.min(bounding.height - 12,
+      coordinate.y + (isBottom ? 16 + data.slot * 16 : -16 - data.slot * 16)));
+    const halfWidth = Math.min(bounding.width / 2, data.text.length * 5 + 5);
+    const labelX = Math.max(halfWidth, Math.min(bounding.width - halfWidth, coordinate.x));
 
     return [
       {
@@ -715,7 +719,7 @@ const lmacdSignalOverlay: OverlayTemplate<LmacdSignalData> = {
         attrs: {
           coordinates: [
             { x: coordinate.x, y: coordinate.y },
-            { x: coordinate.x, y: labelY },
+            { x: labelX, y: labelY },
           ],
         },
         styles: {
@@ -729,7 +733,7 @@ const lmacdSignalOverlay: OverlayTemplate<LmacdSignalData> = {
       {
         type: "text",
         attrs: {
-          x: coordinate.x,
+          x: labelX,
           y: labelY,
           text: data.text,
           align: "center",
@@ -737,16 +741,16 @@ const lmacdSignalOverlay: OverlayTemplate<LmacdSignalData> = {
         },
         styles: {
           color: theme.color,
-          size: 12,
-          weight: "700",
+          size: 10,
+          weight: "500",
           backgroundColor: theme.backgroundColor,
           borderColor: theme.borderColor,
           borderSize: 1,
-          borderRadius: 6,
-          paddingLeft: 6,
-          paddingRight: 6,
-          paddingTop: 3,
-          paddingBottom: 3,
+          borderRadius: 2,
+          paddingLeft: 3,
+          paddingRight: 3,
+          paddingTop: 1,
+          paddingBottom: 1,
         },
         ignoreEvent: true,
       },
@@ -794,7 +798,7 @@ const lmacdIndicator: IndicatorTemplate<LmacdData, number> = {
 
 registerIndicator(lmacdIndicator);
 
-function KLineChartPage() {
+function KLineChartPage({ version = 1 }: { version?: 1 | 2 }) {
   const [messageApi, contextHolder] = message.useMessage();
   const chartHostRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<Chart | null>(null);
@@ -812,6 +816,7 @@ function KLineChartPage() {
   const [activeSymbol, setActiveSymbol] = useState<WatchSymbol>(() => ({
     ...defaultSymbol,
     ticker: readKLineActiveSymbol()?.ticker ?? defaultSymbol.ticker,
+    name: readKLineActiveSymbol()?.ticker && readKLineActiveSymbol()?.ticker !== defaultSymbol.ticker ? '' : defaultSymbol.name,
   }));
   const initialChartSymbolRef = useRef<WatchSymbol | null>(null);
   const [watchSymbols, setWatchSymbols] =
@@ -829,7 +834,7 @@ function KLineChartPage() {
   const [periodValue, setPeriodValue] = useState("1d");
   const [mainIndicator, setMainIndicator] = useState("MA");
   const [selectedPaneIndicators, setSelectedPaneIndicators] =
-    useState<string[]>(defaultPaneIndicators);
+    useState<string[]>(version === 2 ? ['LMACD', 'RSI', 'VOL', NTP_INDICATOR] : defaultPaneIndicators);
   const [drawingTool, setDrawingTool] = useState<string | null>(null);
   const [zoomEnabled, setZoomEnabled] = useState(true);
   const [scrollEnabled, setScrollEnabled] = useState(true);
@@ -1011,7 +1016,10 @@ function KLineChartPage() {
     if (!host) return;
 
     const chart = init(host, {
-      layout: [
+      layout: version === 2 ? [
+        { type: 'candle', options: { id: 'candle_pane', minHeight: 220 } },
+        { type: 'xAxis' },
+      ] : [
         { type: "candle", options: { id: "candle_pane" } },
         {
           type: "indicator",
@@ -1036,6 +1044,7 @@ function KLineChartPage() {
           },
         },
         candle: {
+          ...(version === 2 ? { tooltip: { showRule: 'none' as const } } : {}),
           bar: {
             upColor: "#f23645",
             downColor: "#089981",
@@ -1059,6 +1068,14 @@ function KLineChartPage() {
             },
           },
         },
+        ...(version === 2 ? {
+          indicator: {
+            tooltip: {
+              showRule: 'follow_cross' as const,
+              title: { showName: true, showParams: false },
+            },
+          },
+        } : {}),
         crosshair: {
           horizontal: {
             line: {
@@ -1082,6 +1099,7 @@ function KLineChartPage() {
 
     if (!chart) return;
     chartRef.current = chart;
+    if (version === 2) chart.setBarSpace(Math.max(2, (host.clientWidth - 52) / 86));
     chart.setDataLoader({
       getBars: async ({
         type,
@@ -1195,9 +1213,12 @@ function KLineChartPage() {
     chart.createIndicator("MA", true, { id: "candle_pane" });
     chart.setMaxOffsetLeftDistance(MAX_SCROLL_DISTANCE);
     chart.setMaxOffsetRightDistance(KLINE_MAX_RIGHT_OFFSET);
-    chart.setOffsetRightDistance(KLINE_RIGHT_OFFSET);
+    chart.setOffsetRightDistance(version === 2 ? 12 : KLINE_RIGHT_OFFSET);
 
-    const observer = new ResizeObserver(() => chart.resize());
+    const observer = new ResizeObserver(() => {
+      chart.resize();
+      if (version === 2) chart.setBarSpace(Math.max(2, (host.clientWidth - 52) / 86));
+    });
     observer.observe(host);
 
     return () => {
@@ -1316,18 +1337,20 @@ function KLineChartPage() {
     const chart = chartRef.current;
     if (!chart) return;
     paneIndicatorsRef.current = selectedPaneIndicators;
+    if (version === 2) chart.removeIndicator({ name: 'VOL', paneId: INDICATOR_PANE_ID });
     drawablePaneIndicators.forEach((name) =>
-      chart.removeIndicator({ name, paneId: INDICATOR_PANE_ID }),
+      chart.removeIndicator({ name, paneId: version === 2 && name !== 'LMACD' ? `v2_${name}` : INDICATOR_PANE_ID }),
     );
     selectedPaneIndicators
       .filter((name) => name !== NTP_INDICATOR)
       .forEach((name) => {
         chart.createIndicator(name, false, {
-          id: INDICATOR_PANE_ID,
-          height: 116,
-          minHeight: 80,
+          id: version === 2 && name !== 'LMACD' ? `v2_${name}` : INDICATOR_PANE_ID,
+          height: version === 2 ? Math.round((chartHostRef.current?.clientWidth ?? 393) * (name === 'VOL' ? 0.14 : 0.22)) : 116,
+          minHeight: version === 2 ? 40 : 80,
         });
       });
+    if (version === 2) chart.setPaneOptions({ id: 'candle_pane', minHeight: 220 });
     renderNtpSignalOverlays(
       chart,
       marketBarsRef.current,
@@ -1338,7 +1361,7 @@ function KLineChartPage() {
       marketBarsRef.current,
       selectedPaneIndicators.includes("LMACD"),
     );
-  }, [selectedPaneIndicators]);
+  }, [selectedPaneIndicators, version]);
 
   useEffect(() => {
     paneIndicatorsRef.current = selectedPaneIndicators;
@@ -1484,6 +1507,35 @@ function KLineChartPage() {
     saveGannProjectionResult(projection);
     setSelectedTurningPoint(null);
   };
+
+  if (version === 2) {
+    const bars = marketBarsRef.current;
+    const latest = bars.at(-1);
+    const previous = bars.at(-2)?.close;
+    const change = latest && previous ? (latest.close / previous - 1) * 100 : null;
+    const priceClass = change === null ? 'text-muted' : change >= 0 ? 'text-danger' : 'text-success';
+    return <main className="min-h-dvh bg-background pb-32 text-foreground">
+      {contextHolder}
+      <div className="mx-auto max-w-6xl">
+        <header className="flex h-14 items-center justify-between px-4"><Link to="/watchlist" className="text-sm text-muted">‹ 自选</Link><div className="flex items-center gap-3"><Link to="/kline-legacy" className="text-xs text-muted">旧版</Link><Link to="/watchlist" className="text-sm text-accent">搜索 / 添加自选</Link></div></header>
+        <section className="border-b-4 border-separator/40 px-4 pb-4">
+          <h1 className="text-xl font-semibold">{activeSymbol.ticker.replace(/\.(SH|SZ|US)$/, '')} <span className="ml-2 text-base">{activeSymbol.name}</span></h1>
+          <p className="mt-1 text-xs text-muted">{latest ? new Date(latest.timestamp).toLocaleString() : '等待行情'} · {periodValue} K线</p>
+          <div className="mt-4 grid grid-cols-[1fr_1.2fr] items-center gap-4">
+            <div className={priceClass}><p className="text-3xl font-semibold tabular-nums">{latest ? latest.close.toFixed(3) : '—'}</p><p className="text-sm tabular-nums">{change === null ? '暂无涨跌幅' : `${change >= 0 ? '+' : ''}${change.toFixed(2)}%`}<span className="ml-1 text-xs text-muted">本周期</span></p></div>
+            <dl className="grid grid-cols-2 gap-x-3 gap-y-2 text-xs tabular-nums">{[['最高', latest?.high], ['今开', latest?.open], ['最低', latest?.low], ['前收', previous]].map(([label, value]) => <div key={label} className="flex justify-between gap-2"><dt className="text-muted">{label}</dt><dd>{typeof value === 'number' ? value.toFixed(3) : '—'}</dd></div>)}</dl>
+          </div>
+        </section>
+        <div className="flex items-center justify-between gap-0 overflow-x-auto px-2" aria-label="K线周期">{['1d','1w','1M','1q','1m','5m','15m'].map(value => <HeroButton key={value} size="sm" variant="ghost" className="relative !h-11 !min-w-0 shrink-0 !rounded-none !px-2 !py-0 !text-xs" onPress={() => setPeriodValue(value)}><span className={`rounded-md px-1.5 py-1 ${periodValue === value ? 'bg-surface-secondary font-semibold text-foreground' : 'text-muted'}`}>{periodOptions.find(option => option.value === value)?.label}{['1d','1w','1M','1q'].includes(value) ? 'K' : ''}</span></HeroButton>)}</div>
+        <div className="flex items-center gap-0 overflow-x-auto border-b border-separator px-2"><span className="mr-1 shrink-0 text-[10px] text-muted">主图</span>{['MA','BOLL'].map(value => <HeroButton key={value} size="sm" variant="ghost" className="!h-11 !min-w-0 shrink-0 !rounded-none !px-1 !py-0 !text-[11px]" onPress={() => setMainIndicator(value)}><span className={`rounded px-1.5 py-0.5 ${mainIndicator === value ? 'bg-surface-secondary font-semibold' : 'text-muted'}`}>{value}</span></HeroButton>)}<span className="ml-2 mr-1 shrink-0 text-[10px] text-muted">副图</span>{['LMACD','RSI','VOL'].map(value => <HeroButton key={value} size="sm" variant="ghost" className="!h-11 !min-w-0 shrink-0 !rounded-none !px-1 !py-0 !text-[11px]" onPress={() => setSelectedPaneIndicators(previous => previous.includes(value) ? previous.filter(item => item !== value) : [...previous,value])}><span className={`rounded px-1.5 py-0.5 ${selectedPaneIndicators.includes(value) ? 'bg-surface-secondary font-semibold' : 'text-muted'}`}>{value}</span></HeroButton>)}</div>
+        <div className="relative mx-auto h-[560px] w-full max-w-[720px] bg-white sm:h-[680px]" onClick={handleChartClick} onTouchStart={handleChartTouch} onTouchMove={handleChartTouch}>
+          <div ref={chartHostRef} className="h-full w-full" />
+          {loadingCount > 0 && <div role="status" className="pointer-events-none absolute right-3 top-3 rounded-lg bg-surface/95 px-3 py-2 text-xs shadow-sm">{loadingText}</div>}
+          {selectedTurningPoint && <TurningPointActionPopup point={selectedTurningPoint} onClose={() => setSelectedTurningPoint(null)} onTrendSelect={handleTrendSelect} />}
+        </div>
+      </div>
+    </main>;
+  }
 
   return (
     <main className="h-screen overflow-hidden bg-[#f5f5f5] pb-24">
