@@ -33,9 +33,9 @@ const MARKET_CONFIG = {
     slug: "a-shares",
     marketName: "A 股",
     title: "沪深300 + 中证500 · 日线 / 周线信号",
-    scheduleText: "每个工作日北京时间 15:30",
-    scheduleTime: "15:30",
-    historyText: "每天 15:30",
+    scheduleText: "每个工作日北京时间 15:00",
+    scheduleTime: "15:00",
+    historyText: "每天 15:00",
     universeText: "仅扫描沪深300与中证500成分股，合并去重。",
     iconClass: "text-red-500",
   },
@@ -43,9 +43,9 @@ const MARKET_CONFIG = {
     slug: "us-macd-divergence",
     marketName: "美股",
     title: "标普500 + 纳斯达克100 · 日线 / 周线信号",
-    scheduleText: "美股交易日结束后的北京时间 05:30",
-    scheduleTime: "05:30（北京时间）",
-    historyText: "美股交易日次日 05:30（北京时间）",
+    scheduleText: "每个美股交易日纽约时间 16:00（北京时间夏令时 04:00、冬令时 05:00）",
+    scheduleTime: "16:00（纽约时间）",
+    historyText: "每个美股交易日 16:00（纽约时间）",
     universeText: "根据 SPY、QQQ 官方股票持仓合并去重；道琼斯作为筛选标签。",
     iconClass: "text-blue-500",
   },
@@ -838,7 +838,7 @@ export default function AshareSignalScannerPanel({ market = "cn" }: { market?: M
           <Typography.Text type="secondary">
             {snapshot?.schedulerEnabled === false ? "自动扫描已暂停，可手动开始；计划时间：" : "自动扫描时间："}{config.scheduleText}，使用完整收盘日 K 和收盘扫描价记录信号。周线只使用已经收盘的完整周 K。LMACD 只统计刚触发的“底部买入”。
             {config.universeText && ` ${config.universeText}`}
-            {market === "us" ? " 数据更新完成后通知，最早北京时间 05:30；全年固定此时间。" : " 数据更新完成后发送通知，无买入信号也会通知。"}
+            {market === "us" ? " 纽约时间 16:10 定时通知（北京时间夏令时 04:10、冬令时 05:10）；扫描超时则完成后发送。" : " 北京时间 15:10 定时通知；扫描超时则完成后发送，无买入信号也会通知。"}
           </Typography.Text>
 
           {snapshot?.stockPool && (
